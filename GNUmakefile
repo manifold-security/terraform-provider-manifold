@@ -1,6 +1,6 @@
 SPEC_REF ?= origin/main
 CORE_DIR ?= ../core
-TOFU     ?= tofu
+TF_BIN   ?= tofu
 SCHEMA   := .schema/schema.json
 
 default: fmt lint install generate
@@ -16,14 +16,14 @@ lint:
 
 fmt:
 	gofmt -s -w -e .
-	$(TOFU) fmt -recursive examples/
+	$(TF_BIN) fmt -recursive examples/
 
 test:
 	go test -v -cover -timeout=120s -parallel=10 ./...
 
 # Runs against a real instance; see README for the MANIFOLD_* variables.
 testacc:
-	TF_ACC=1 TF_ACC_TERRAFORM_PATH=$$(command -v $(TOFU)) TF_ACC_PROVIDER_NAMESPACE=manifold-security \
+	TF_ACC=1 TF_ACC_TERRAFORM_PATH=$$(command -v $(TF_BIN)) TF_ACC_PROVIDER_NAMESPACE=manifold-security \
 		go test -v -cover -timeout 120m ./...
 
 # Deletes tf-acc-* policies leaked by interrupted acceptance runs.
@@ -38,8 +38,8 @@ spec:
 generate: install
 	go generate ./...
 	@mkdir -p .schema
-	printf 'provider_installation {\n  dev_overrides { "manifold-security/manifold" = "%s" }\n  direct {}\n}\n' "$$(go env GOPATH)/bin" > .schema/tofurc
-	cd examples/provider && TF_CLI_CONFIG_FILE=../../.schema/tofurc $(TOFU) providers schema -json \
+	printf 'provider_installation {\n  dev_overrides { "manifold-security/manifold" = "%s" }\n  direct {}\n}\n' "$$(go env GOPATH)/bin" > .schema/cli.tfrc
+	cd examples/provider && TF_CLI_CONFIG_FILE=../../.schema/cli.tfrc $(TF_BIN) providers schema -json \
 		| jq '.provider_schemas |= with_entries(.key = "manifold")' > ../../$(SCHEMA)
 	go tool -modfile=tools/go.mod tfplugindocs generate --provider-name manifold --providers-schema $(SCHEMA)
 
