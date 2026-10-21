@@ -1887,17 +1887,11 @@ paths:
       operationId: updateInventoryTags
       security:
         - oauth2: [write:inventory]
-      summary: Update customer-authored tags on an inventory entity or one of its versions.
+      summary: Update customer-authored tags on an inventory entity.
       description: |
         Adds every tag in `add` to the entity's tag set and removes every tag in
         `remove`, atomically. Tags carry no value. The write is audited; URIs not
         present in inventory return 404.
-        With `version`, the tags go on that one version of a skill, plugin or MCP
-        server (its `version_key`: a content hash for a skill or plugin, a release
-        for an MCP server) and the response carries the version's own tags. A hook
-        call running the version reads them merged with the entity's tags.
-        `version` on any other entity kind, or a key no version of it could have,
-        returns 400.
         The path is nested under /inventory so the existing `mgmt-write-inventory`
         gateway rule (PathPrefix `/management/v1/inventory`, POST) already routes it.
       tags: [Inventory]
@@ -4000,13 +3994,6 @@ components:
           minLength: 1
           maxLength: 1024
           description: URI of the inventory entity to update.
-        version:
-          type: string
-          minLength: 1
-          maxLength: 200
-          description: >-
-            Tag this version of the skill, plugin or MCP server, its
-            `version_key`, instead of the entity.
         add:
           type: array
           items: { type: string }
@@ -4039,15 +4026,10 @@ components:
       properties:
         uri:
           type: string
-        version:
-          type: string
-          description: The version tagged; absent for the entity's own tags.
         tags:
           type: array
           items: { type: string }
-          description: >-
-            The full tag set after the update, sorted: the version's own when
-            `version` is set, else the entity's.
+          description: The full tag set for the entity after the update, sorted.
 
     ManifestScanResult:
       oneOf:

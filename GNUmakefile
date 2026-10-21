@@ -1,5 +1,5 @@
 SPEC_REF ?= origin/main
-CORE_DIR ?= ../core
+DOCS_DIR ?= ../docs
 TF_BIN   ?= tofu
 SCHEMA   := .schema/schema.json
 
@@ -30,10 +30,10 @@ testacc:
 sweep:
 	go test ./internal/provider -v -sweep=default -timeout 10m
 
-# Refreshes the vendored management API spec from core.
+# Refreshes the vendored management API spec from the published copy in the docs repo.
 spec:
-	git -C $(CORE_DIR) fetch -q origin
-	git -C $(CORE_DIR) show $(SPEC_REF):apps/api-server/api/management/v1/openapi.yaml > api/management-v1.yaml
+	git -C $(DOCS_DIR) fetch -q origin
+	git -C $(DOCS_DIR) show $(SPEC_REF):openapi/management.yaml > api/management-v1.yaml
 
 generate: install
 	go generate ./...
