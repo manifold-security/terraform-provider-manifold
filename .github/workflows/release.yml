@@ -53,3 +53,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
+      - uses: spacelift-io/setup-spacectl@c603e78126217876d6a87b2220a32fe423f95a50 # v2.5.0
+        with:
+          version: v1.28.0
+      - name: Publish to the Spacelift registry
+        env:
+          SPACELIFT_API_KEY_ENDPOINT: https://manifold-security.app.spacelift.io
+          SPACELIFT_API_KEY_ID: ${{ secrets.SPACELIFT_API_KEY_ID }}
+          SPACELIFT_API_KEY_SECRET: ${{ secrets.SPACELIFT_API_KEY_SECRET }}
+        # spacectl defaults to protocol 5.0; plugin-framework providers speak 6.0.
+        run: |
+          version_id=$(spacectl provider create-version --type=manifold --protocols=6.0 --quiet)
+          spacectl provider publish-version --version="$version_id"
