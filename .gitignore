@@ -1,0 +1,7 @@
+/terraform-provider-manifold
+/dist/
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+/.schema/
