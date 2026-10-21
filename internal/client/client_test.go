@@ -17,6 +17,7 @@ type fakeAPI struct {
 	tokenCalls atomic.Int32
 	throttled  atomic.Bool
 	redirectTo string
+	failCalls  atomic.Int32
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -77,6 +78,16 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"type":"about:blank","title":"Not Found","status":404,"code":"policy_not_found","request_id":"req-1"}`))
 	})
+
+	badGateway := func(w http.ResponseWriter, _ *http.Request) {
+		f.failCalls.Add(1)
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"type":"about:blank","title":"Bad Gateway","status":502,"request_id":"req-502"}`))
+	}
+	for _, method := range []string{"GET", "PATCH"} {
+		mux.HandleFunc(method+" /api/management/v1/governance/policies/00000000-0000-0000-0000-000000000502", badGateway)
+	}
 
 	f.Server = httptest.NewServer(mux)
 	t.Cleanup(f.Close)
@@ -158,5 +169,31 @@ func TestRedirectsAreRefused(t *testing.T) {
 
 	if _, err := m.GetGovernancePolicyWithResponse(t.Context(), uuid.New()); err == nil {
 		t.Fatal("expected the redirect to fail the request")
+	}
+}
+
+func TestRetriesOnlyReplayableMethods(t *testing.T) {
+	f := newFakeAPI(t)
+	m := newTestClient(t, f)
+	id := uuid.MustParse("00000000-0000-0000-0000-000000000502")
+	title := "x"
+
+	patch, err := m.UpdateGovernancePolicyWithResponse(t.Context(), id, &UpdateGovernancePolicyParams{}, GovernancePolicyUpdate{Title: &title})
+	if err != nil {
+		t.Fatalf("PATCH: %v", err)
+	}
+	if n := f.failCalls.Swap(0); n != 1 {
+		t.Errorf("PATCH sent %d times, want 1", n)
+	}
+	apiErr := NewAPIError(patch.StatusCode(), patch.Body)
+	if want := "management API returned HTTP 502: Bad Gateway (request_id req-502)"; apiErr.Error() != want {
+		t.Errorf("PATCH error = %q, want %q", apiErr.Error(), want)
+	}
+
+	if _, err := m.GetGovernancePolicyWithResponse(t.Context(), id); err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	if n := f.failCalls.Load(); n != 4 {
+		t.Errorf("GET sent %d times, want 4", n)
 	}
 }

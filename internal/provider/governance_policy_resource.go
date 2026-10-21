@@ -260,7 +260,11 @@ func (r *governancePolicyResource) Update(ctx context.Context, req resource.Upda
 	// An empty string is how the API clears a response message.
 	msg := plan.ResponseMessage.ValueString()
 
-	id := uuid.MustParse(plan.ID.ValueString())
+	id, err := uuid.Parse(plan.ID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("id"), "Invalid policy id", err.Error())
+		return
+	}
 	out, err := r.client.UpdateGovernancePolicyWithResponse(ctx, id, &client.UpdateGovernancePolicyParams{IfMatch: etag}, client.GovernancePolicyUpdate{
 		Title:            &f.title,
 		Description:      &f.description,
@@ -299,7 +303,11 @@ func (r *governancePolicyResource) Delete(ctx context.Context, req resource.Dele
 		return
 	}
 
-	id := uuid.MustParse(state.ID.ValueString())
+	id, err := uuid.Parse(state.ID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("id"), "Invalid policy id", err.Error())
+		return
+	}
 	out, err := r.client.DeleteGovernancePolicyWithResponse(ctx, id, &client.DeleteGovernancePolicyParams{IfMatch: etag})
 	if err == nil && out.StatusCode() != http.StatusNoContent {
 		err = client.NewAPIError(out.StatusCode(), out.Body)
@@ -398,15 +406,21 @@ func (r *governancePolicyResource) setState(ctx context.Context, p client.Govern
 	}
 	diags.Append(state.Set(ctx, &m)...)
 
+	var raw []byte
 	if etag := httpResp.Header.Get("ETag"); etag != "" {
-		raw, _ := json.Marshal(etag)
-		diags.Append(private.SetKey(ctx, etagKey, raw)...)
+		raw, _ = json.Marshal(etag)
 	}
+	diags.Append(private.SetKey(ctx, etagKey, raw)...)
 }
 
 func readETag(ctx context.Context, private privateReader) (*string, diag.Diagnostics) {
 	raw, diags := private.GetKey(ctx, etagKey)
-	if diags.HasError() || len(raw) == 0 {
+	if diags.HasError() {
+		return nil, diags
+	}
+	if len(raw) == 0 {
+		diags.AddError("Missing ETag for governance policy",
+			"The last read of this policy returned no ETag, so the change can't be guarded against concurrent edits and was not sent. Run plan again to refresh it.")
 		return nil, diags
 	}
 	var etag string

@@ -70,10 +70,12 @@ func New(ctx context.Context, cfg Config) (*Manifold, error) {
 
 	retrying := retryablehttp.NewClient()
 	retrying.Logger = nil
-	retrying.RetryMax = 4
+	retrying.RetryMax = 3
+	retrying.RetryWaitMax = 10 * time.Second
 	retrying.CheckRetry = retryPolicy
+	retrying.ErrorHandler = retryablehttp.PassthroughErrorHandler
 	retrying.HTTPClient = &http.Client{
-		Timeout:       60 * time.Second,
+		Timeout:       30 * time.Second,
 		CheckRedirect: refuseRedirect,
 		Transport: &oauth2.Transport{
 			Source: ts,
@@ -117,11 +119,30 @@ func refuseRedirect(req *http.Request, _ []*http.Request) error {
 	return fmt.Errorf("%w to %s", errRedirect, req.URL.Redacted())
 }
 
+// A 429 is retried for any method since nothing was processed; other failures only for GET and DELETE, as a replayed POST duplicates and a replayed If-Match PATCH returns 412.
 func retryPolicy(ctx context.Context, resp *http.Response, err error) (bool, error) {
 	if errors.Is(err, errRedirect) {
 		return false, err
 	}
+	if resp != nil && resp.StatusCode == http.StatusTooManyRequests {
+		return retryablehttp.DefaultRetryPolicy(ctx, resp, err)
+	}
+	if !replayable(resp, err) {
+		return false, nil
+	}
 	return retryablehttp.DefaultRetryPolicy(ctx, resp, err)
+}
+
+func replayable(resp *http.Response, err error) bool {
+	var method string
+	var urlErr *url.Error
+	switch {
+	case resp != nil && resp.Request != nil:
+		method = resp.Request.Method
+	case errors.As(err, &urlErr):
+		method = strings.ToUpper(urlErr.Op)
+	}
+	return method == http.MethodGet || method == http.MethodDelete
 }
 
 // ListAllGovernancePolicies walks every page; params.Cursor and params.Limit are managed here.
