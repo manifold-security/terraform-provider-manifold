@@ -4,6 +4,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -275,10 +276,61 @@ type GovernancePolicyActionOptions struct {
 	NotifyUser bool `json:"notify_user"`
 }
 
+// GovernancePolicyActionOptionsInput Action options to set. Every option is optional; an unknown one is a 400.
+type GovernancePolicyActionOptionsInput struct {
+	// NotifyUser Alert only: show the user a notice when this policy fires; the
+	// violation is recorded either way. Defaults to false.
+	NotifyUser *bool `json:"notify_user,omitempty"`
+}
+
 // GovernancePolicyCategory What a governance policy governs. A closed set specific to this lane —
 // governance policies are authored rules, so they do not share the detector
 // categories that risks and threat detection rules are filed under.
 type GovernancePolicyCategory string
+
+// GovernancePolicyCreate A new customer-authored policy. The id and `is_managed` are set by the
+// server.
+type GovernancePolicyCreate struct {
+	// Action What a policy does when it matches. `alert` records the match; `advise`
+	// lets the call run and puts the policy's `response_message` in the model's
+	// context; `correct` stops the call and hands the model `response_message`
+	// as the reason, so it retries with the safe form; `ask` puts the call to
+	// the developer and denies only if nobody can be reached; `block` denies the
+	// tool call or prompt in flight; `block_session` denies it and blocks every
+	// later call in the session, permanently. `correct` and `advise` require a
+	// non-blank `response_message`.
+	Action GovernanceAction `json:"action"`
+
+	// ActionOptions Action options to set. Every option is optional; an unknown one is a 400.
+	ActionOptions *GovernancePolicyActionOptionsInput `json:"action_options,omitempty"`
+
+	// Category What a governance policy governs. A closed set specific to this lane —
+	// governance policies are authored rules, so they do not share the detector
+	// categories that risks and threat detection rules are filed under.
+	Category GovernancePolicyCategory `json:"category"`
+
+	// CedarPolicy The rule the policy is evaluated from.
+	CedarPolicy string `json:"cedar_policy"`
+	Description string `json:"description"`
+
+	// Enabled Defaults to true. Create with false to stage a policy before it takes effect.
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Priority Attribution order when several block policies match one event: higher
+	// wins. Defaults to 0; negative values rank the policy below the default.
+	// Does not change whether an event is blocked.
+	Priority *int32 `json:"priority,omitempty"`
+
+	// ResponseMessage What a blocked agent is told. A template; omitted leaves the default
+	// message. Required, and must not be blank, when `action` is `correct`
+	// or `advise`.
+	ResponseMessage *string `json:"response_message,omitempty"`
+
+	// Severity Severity value accepted by the server on the severity filter.
+	Severity         *SeverityInput `json:"severity,omitempty"`
+	TaxonomyMappings *[]string      `json:"taxonomy_mappings,omitempty"`
+	Title            string         `json:"title"`
+}
 
 // GovernancePolicyList defines model for GovernancePolicyList.
 type GovernancePolicyList struct {
@@ -349,6 +401,56 @@ type GovernancePolicySummary struct {
 
 	// UpdatedAt When the policy was last changed. The default sort walks this.
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// GovernancePolicyUpdate Partial edit of one policy. Every field is optional; at least one must be
+// present. A field left out is left as it stands. `action_options` is merged
+// per key: only the options sent change, and sending an option's default
+// clears it. `taxonomy_mappings`, by contrast, is replaced wholesale.
+type GovernancePolicyUpdate struct {
+	// Action What a policy does when it matches. `alert` records the match; `advise`
+	// lets the call run and puts the policy's `response_message` in the model's
+	// context; `correct` stops the call and hands the model `response_message`
+	// as the reason, so it retries with the safe form; `ask` puts the call to
+	// the developer and denies only if nobody can be reached; `block` denies the
+	// tool call or prompt in flight; `block_session` denies it and blocks every
+	// later call in the session, permanently. `correct` and `advise` require a
+	// non-blank `response_message`.
+	Action *GovernanceAction `json:"action,omitempty"`
+
+	// ActionOptions Action options to set. Every option is optional; an unknown one is a 400.
+	ActionOptions *GovernancePolicyActionOptionsInput `json:"action_options,omitempty"`
+
+	// Category What a governance policy governs. A closed set specific to this lane —
+	// governance policies are authored rules, so they do not share the detector
+	// categories that risks and threat detection rules are filed under.
+	Category *GovernancePolicyCategory `json:"category,omitempty"`
+
+	// CedarPolicy Replaces the rule the policy is evaluated from. The assets it names
+	// are re-derived from it.
+	CedarPolicy *string `json:"cedar_policy,omitempty"`
+	Description *string `json:"description,omitempty"`
+
+	// Enabled Whether the policy is evaluated at all.
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Priority Attribution order when several block policies match one event: higher
+	// wins. Omit to leave unchanged; send 0 to reset to the default. Carries
+	// no schema default on purpose — one would make an omitted field
+	// indistinguishable from an explicit 0 and silently reset the value.
+	Priority *int32 `json:"priority,omitempty"`
+
+	// ResponseMessage What a blocked agent is told. A template; the empty string clears it
+	// and restores the default message, which a `correct` or `advise`
+	// policy refuses.
+	ResponseMessage *string `json:"response_message,omitempty"`
+
+	// Severity Severity value accepted by the server on the severity filter.
+	Severity *SeverityInput `json:"severity,omitempty"`
+
+	// TaxonomyMappings Replaces the whole set of framework codes.
+	TaxonomyMappings *[]string `json:"taxonomy_mappings,omitempty"`
+	Title            *string   `json:"title,omitempty"`
 }
 
 // Problem RFC 7807 Problem Details with Manifold extensions.
@@ -462,17 +564,26 @@ type SortOrder string
 // CursorParam defines model for CursorParam.
 type CursorParam = string
 
+// IfMatchParam defines model for IfMatchParam.
+type IfMatchParam = string
+
 // LimitParam defines model for LimitParam.
 type LimitParam = int
 
 // BadRequest RFC 7807 Problem Details with Manifold extensions.
 type BadRequest = Problem
 
+// Forbidden RFC 7807 Problem Details with Manifold extensions.
+type Forbidden = Problem
+
 // InternalError RFC 7807 Problem Details with Manifold extensions.
 type InternalError = Problem
 
 // NotFound RFC 7807 Problem Details with Manifold extensions.
 type NotFound = Problem
+
+// PreconditionFailed RFC 7807 Problem Details with Manifold extensions.
+type PreconditionFailed = Problem
 
 // TooManyRequests RFC 7807 Problem Details with Manifold extensions.
 type TooManyRequests = Problem
@@ -519,6 +630,30 @@ type ListGovernancePoliciesParams struct {
 	SortBy    *GovernancePolicySortBy `form:"sort_by,omitempty" json:"sort_by,omitempty"`
 	SortOrder *SortOrder              `form:"sort_order,omitempty" json:"sort_order,omitempty"`
 }
+
+// DeleteGovernancePolicyParams defines parameters for DeleteGovernancePolicy.
+type DeleteGovernancePolicyParams struct {
+	// IfMatch The `ETag` from the most recent read of this resource. When present the
+	// edit applies only if the resource is still at that version; otherwise it
+	// is refused with 412 and nothing is written. Omit it to edit
+	// unconditionally.
+	IfMatch *IfMatchParam `json:"If-Match,omitempty"`
+}
+
+// UpdateGovernancePolicyParams defines parameters for UpdateGovernancePolicy.
+type UpdateGovernancePolicyParams struct {
+	// IfMatch The `ETag` from the most recent read of this resource. When present the
+	// edit applies only if the resource is still at that version; otherwise it
+	// is refused with 412 and nothing is written. Omit it to edit
+	// unconditionally.
+	IfMatch *IfMatchParam `json:"If-Match,omitempty"`
+}
+
+// CreateGovernancePolicyJSONRequestBody defines body for CreateGovernancePolicy for application/json ContentType.
+type CreateGovernancePolicyJSONRequestBody = GovernancePolicyCreate
+
+// UpdateGovernancePolicyJSONRequestBody defines body for UpdateGovernancePolicy for application/json ContentType.
+type UpdateGovernancePolicyJSONRequestBody = GovernancePolicyUpdate
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -596,8 +731,21 @@ type ClientInterface interface {
 	// ListGovernancePolicies request
 	ListGovernancePolicies(ctx context.Context, params *ListGovernancePoliciesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// CreateGovernancePolicyWithBody request with any body
+	CreateGovernancePolicyWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateGovernancePolicy(ctx context.Context, body CreateGovernancePolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteGovernancePolicy request
+	DeleteGovernancePolicy(ctx context.Context, policyId openapi_types.UUID, params *DeleteGovernancePolicyParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetGovernancePolicy request
 	GetGovernancePolicy(ctx context.Context, policyId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UpdateGovernancePolicyWithBody request with any body
+	UpdateGovernancePolicyWithBody(ctx context.Context, policyId openapi_types.UUID, params *UpdateGovernancePolicyParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UpdateGovernancePolicy(ctx context.Context, policyId openapi_types.UUID, params *UpdateGovernancePolicyParams, body UpdateGovernancePolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 func (c *Client) ListGovernancePolicies(ctx context.Context, params *ListGovernancePoliciesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -612,8 +760,68 @@ func (c *Client) ListGovernancePolicies(ctx context.Context, params *ListGoverna
 	return c.Client.Do(req)
 }
 
+func (c *Client) CreateGovernancePolicyWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateGovernancePolicyRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CreateGovernancePolicy(ctx context.Context, body CreateGovernancePolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateGovernancePolicyRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeleteGovernancePolicy(ctx context.Context, policyId openapi_types.UUID, params *DeleteGovernancePolicyParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteGovernancePolicyRequest(c.Server, policyId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) GetGovernancePolicy(ctx context.Context, policyId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetGovernancePolicyRequest(c.Server, policyId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateGovernancePolicyWithBody(ctx context.Context, policyId openapi_types.UUID, params *UpdateGovernancePolicyParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateGovernancePolicyRequestWithBody(c.Server, policyId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateGovernancePolicy(ctx context.Context, policyId openapi_types.UUID, params *UpdateGovernancePolicyParams, body UpdateGovernancePolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateGovernancePolicyRequest(c.Server, policyId, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -849,6 +1057,95 @@ func NewListGovernancePoliciesRequest(server string, params *ListGovernancePolic
 	return req, nil
 }
 
+// NewCreateGovernancePolicyRequest calls the generic CreateGovernancePolicy builder with application/json body
+func NewCreateGovernancePolicyRequest(server string, body CreateGovernancePolicyJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateGovernancePolicyRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateGovernancePolicyRequestWithBody generates requests for CreateGovernancePolicy with any type of body
+func NewCreateGovernancePolicyRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/governance/policies")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewDeleteGovernancePolicyRequest generates requests for DeleteGovernancePolicy
+func NewDeleteGovernancePolicyRequest(server string, policyId openapi_types.UUID, params *DeleteGovernancePolicyParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "policyId", policyId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/governance/policies/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		if params.IfMatch != nil {
+			var headerParam0 string
+
+			headerParam0, err = runtime.StyleParamWithOptions("simple", false, "If-Match", *params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("If-Match", headerParam0)
+		}
+
+	}
+
+	return req, nil
+}
+
 // NewGetGovernancePolicyRequest generates requests for GetGovernancePolicy
 func NewGetGovernancePolicyRequest(server string, policyId openapi_types.UUID) (*http.Request, error) {
 	var err error
@@ -878,6 +1175,68 @@ func NewGetGovernancePolicyRequest(server string, policyId openapi_types.UUID) (
 	req, err := http.NewRequest("GET", queryURL.String(), nil)
 	if err != nil {
 		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewUpdateGovernancePolicyRequest calls the generic UpdateGovernancePolicy builder with application/json body
+func NewUpdateGovernancePolicyRequest(server string, policyId openapi_types.UUID, params *UpdateGovernancePolicyParams, body UpdateGovernancePolicyJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpdateGovernancePolicyRequestWithBody(server, policyId, params, "application/json", bodyReader)
+}
+
+// NewUpdateGovernancePolicyRequestWithBody generates requests for UpdateGovernancePolicy with any type of body
+func NewUpdateGovernancePolicyRequestWithBody(server string, policyId openapi_types.UUID, params *UpdateGovernancePolicyParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "policyId", policyId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/governance/policies/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("PATCH", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		if params.IfMatch != nil {
+			var headerParam0 string
+
+			headerParam0, err = runtime.StyleParamWithOptions("simple", false, "If-Match", *params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("If-Match", headerParam0)
+		}
+
 	}
 
 	return req, nil
@@ -929,8 +1288,21 @@ type ClientWithResponsesInterface interface {
 	// ListGovernancePoliciesWithResponse request
 	ListGovernancePoliciesWithResponse(ctx context.Context, params *ListGovernancePoliciesParams, reqEditors ...RequestEditorFn) (*ListGovernancePoliciesResponse, error)
 
+	// CreateGovernancePolicyWithBodyWithResponse request with any body
+	CreateGovernancePolicyWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateGovernancePolicyResponse, error)
+
+	CreateGovernancePolicyWithResponse(ctx context.Context, body CreateGovernancePolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateGovernancePolicyResponse, error)
+
+	// DeleteGovernancePolicyWithResponse request
+	DeleteGovernancePolicyWithResponse(ctx context.Context, policyId openapi_types.UUID, params *DeleteGovernancePolicyParams, reqEditors ...RequestEditorFn) (*DeleteGovernancePolicyResponse, error)
+
 	// GetGovernancePolicyWithResponse request
 	GetGovernancePolicyWithResponse(ctx context.Context, policyId openapi_types.UUID, reqEditors ...RequestEditorFn) (*GetGovernancePolicyResponse, error)
+
+	// UpdateGovernancePolicyWithBodyWithResponse request with any body
+	UpdateGovernancePolicyWithBodyWithResponse(ctx context.Context, policyId openapi_types.UUID, params *UpdateGovernancePolicyParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateGovernancePolicyResponse, error)
+
+	UpdateGovernancePolicyWithResponse(ctx context.Context, policyId openapi_types.UUID, params *UpdateGovernancePolicyParams, body UpdateGovernancePolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateGovernancePolicyResponse, error)
 }
 
 type ListGovernancePoliciesResponse struct {
@@ -953,6 +1325,60 @@ func (r ListGovernancePoliciesResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r ListGovernancePoliciesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type CreateGovernancePolicyResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON201                   *GovernancePolicy
+	ApplicationproblemJSON400 *BadRequest
+	ApplicationproblemJSON401 *Unauthorized
+	ApplicationproblemJSON429 *TooManyRequests
+	ApplicationproblemJSON500 *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateGovernancePolicyResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateGovernancePolicyResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type DeleteGovernancePolicyResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	ApplicationproblemJSON400 *BadRequest
+	ApplicationproblemJSON401 *Unauthorized
+	ApplicationproblemJSON403 *Forbidden
+	ApplicationproblemJSON404 *NotFound
+	ApplicationproblemJSON412 *PreconditionFailed
+	ApplicationproblemJSON429 *TooManyRequests
+	ApplicationproblemJSON500 *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteGovernancePolicyResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteGovernancePolicyResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -985,6 +1411,35 @@ func (r GetGovernancePolicyResponse) StatusCode() int {
 	return 0
 }
 
+type UpdateGovernancePolicyResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *GovernancePolicy
+	ApplicationproblemJSON400 *BadRequest
+	ApplicationproblemJSON401 *Unauthorized
+	ApplicationproblemJSON403 *Forbidden
+	ApplicationproblemJSON404 *NotFound
+	ApplicationproblemJSON412 *PreconditionFailed
+	ApplicationproblemJSON429 *TooManyRequests
+	ApplicationproblemJSON500 *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r UpdateGovernancePolicyResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpdateGovernancePolicyResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 // ListGovernancePoliciesWithResponse request returning *ListGovernancePoliciesResponse
 func (c *ClientWithResponses) ListGovernancePoliciesWithResponse(ctx context.Context, params *ListGovernancePoliciesParams, reqEditors ...RequestEditorFn) (*ListGovernancePoliciesResponse, error) {
 	rsp, err := c.ListGovernancePolicies(ctx, params, reqEditors...)
@@ -994,6 +1449,32 @@ func (c *ClientWithResponses) ListGovernancePoliciesWithResponse(ctx context.Con
 	return ParseListGovernancePoliciesResponse(rsp)
 }
 
+// CreateGovernancePolicyWithBodyWithResponse request with arbitrary body returning *CreateGovernancePolicyResponse
+func (c *ClientWithResponses) CreateGovernancePolicyWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateGovernancePolicyResponse, error) {
+	rsp, err := c.CreateGovernancePolicyWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateGovernancePolicyResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateGovernancePolicyWithResponse(ctx context.Context, body CreateGovernancePolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateGovernancePolicyResponse, error) {
+	rsp, err := c.CreateGovernancePolicy(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateGovernancePolicyResponse(rsp)
+}
+
+// DeleteGovernancePolicyWithResponse request returning *DeleteGovernancePolicyResponse
+func (c *ClientWithResponses) DeleteGovernancePolicyWithResponse(ctx context.Context, policyId openapi_types.UUID, params *DeleteGovernancePolicyParams, reqEditors ...RequestEditorFn) (*DeleteGovernancePolicyResponse, error) {
+	rsp, err := c.DeleteGovernancePolicy(ctx, policyId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteGovernancePolicyResponse(rsp)
+}
+
 // GetGovernancePolicyWithResponse request returning *GetGovernancePolicyResponse
 func (c *ClientWithResponses) GetGovernancePolicyWithResponse(ctx context.Context, policyId openapi_types.UUID, reqEditors ...RequestEditorFn) (*GetGovernancePolicyResponse, error) {
 	rsp, err := c.GetGovernancePolicy(ctx, policyId, reqEditors...)
@@ -1001,6 +1482,23 @@ func (c *ClientWithResponses) GetGovernancePolicyWithResponse(ctx context.Contex
 		return nil, err
 	}
 	return ParseGetGovernancePolicyResponse(rsp)
+}
+
+// UpdateGovernancePolicyWithBodyWithResponse request with arbitrary body returning *UpdateGovernancePolicyResponse
+func (c *ClientWithResponses) UpdateGovernancePolicyWithBodyWithResponse(ctx context.Context, policyId openapi_types.UUID, params *UpdateGovernancePolicyParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateGovernancePolicyResponse, error) {
+	rsp, err := c.UpdateGovernancePolicyWithBody(ctx, policyId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateGovernancePolicyResponse(rsp)
+}
+
+func (c *ClientWithResponses) UpdateGovernancePolicyWithResponse(ctx context.Context, policyId openapi_types.UUID, params *UpdateGovernancePolicyParams, body UpdateGovernancePolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateGovernancePolicyResponse, error) {
+	rsp, err := c.UpdateGovernancePolicy(ctx, policyId, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateGovernancePolicyResponse(rsp)
 }
 
 // ParseListGovernancePoliciesResponse parses an HTTP response from a ListGovernancePoliciesWithResponse call
@@ -1057,6 +1555,128 @@ func ParseListGovernancePoliciesResponse(rsp *http.Response) (*ListGovernancePol
 	return response, nil
 }
 
+// ParseCreateGovernancePolicyResponse parses an HTTP response from a CreateGovernancePolicyWithResponse call
+func ParseCreateGovernancePolicyResponse(rsp *http.Response) (*CreateGovernancePolicyResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateGovernancePolicyResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest GovernancePolicy
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest TooManyRequests
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteGovernancePolicyResponse parses an HTTP response from a DeleteGovernancePolicyWithResponse call
+func ParseDeleteGovernancePolicyResponse(rsp *http.Response) (*DeleteGovernancePolicyResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteGovernancePolicyResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 412:
+		var dest PreconditionFailed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON412 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest TooManyRequests
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseGetGovernancePolicyResponse parses an HTTP response from a GetGovernancePolicyWithResponse call
 func ParseGetGovernancePolicyResponse(rsp *http.Response) (*GetGovernancePolicyResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -1091,6 +1711,81 @@ func ParseGetGovernancePolicyResponse(rsp *http.Response) (*GetGovernancePolicyR
 			return nil, err
 		}
 		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest TooManyRequests
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUpdateGovernancePolicyResponse parses an HTTP response from a UpdateGovernancePolicyWithResponse call
+func ParseUpdateGovernancePolicyResponse(rsp *http.Response) (*UpdateGovernancePolicyResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpdateGovernancePolicyResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest GovernancePolicy
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 412:
+		var dest PreconditionFailed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON412 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
 		var dest TooManyRequests

@@ -26,6 +26,10 @@ testacc:
 	TF_ACC=1 TF_ACC_TERRAFORM_PATH=$$(command -v $(TOFU)) TF_ACC_PROVIDER_NAMESPACE=manifold-security \
 		go test -v -cover -timeout 120m ./...
 
+# Deletes tf-acc-* policies leaked by interrupted acceptance runs.
+sweep:
+	go test ./internal/provider -v -sweep=default -timeout 10m
+
 # Refreshes the vendored management API spec from core.
 spec:
 	git -C $(CORE_DIR) fetch -q origin
@@ -39,4 +43,4 @@ generate: install
 		| jq '.provider_schemas |= with_entries(.key = "manifold")' > ../../$(SCHEMA)
 	go tool -modfile=tools/go.mod tfplugindocs generate --provider-name manifold --providers-schema $(SCHEMA)
 
-.PHONY: default build install lint fmt test testacc spec generate
+.PHONY: default build install lint fmt test testacc sweep spec generate

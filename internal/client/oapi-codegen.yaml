@@ -8,3 +8,6 @@ output-options:
   include-operation-ids:
     - listGovernancePolicies
     - getGovernancePolicy
+    - createGovernancePolicy
+    - updateGovernancePolicy
+    - deleteGovernancePolicy

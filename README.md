@@ -1,22 +1,23 @@
 # terraform-provider-manifold
 
-Terraform/OpenTofu provider for the Manifold [management API](https://docs.manifoldsecurity.io/api-reference/management-api). It lets governance policies be versioned, reviewed and applied from code instead of the dashboard.
+A Terraform/OpenTofu provider for the Manifold [management API](https://docs.manifoldsecurity.io/api-reference/management-api). Use it to keep governance policies in code, where they go through review like everything else, instead of editing them in the dashboard.
 
-| Kind | Name | Notes |
+| Kind | Name | What it does |
 | --- | --- | --- |
-| Data source | `manifold_governance_policy` | One policy by id, including its `cedar_policy` |
-| Data source | `manifold_governance_policies` | Filtered list of the catalog (managed and customer-authored) |
+| Resource | `manifold_governance_policy` | Creates, updates and deletes customer-authored policies. Import takes the policy UUID. |
+| Data source | `manifold_governance_policy` | Reads one policy by id, Cedar rule included. |
+| Data source | `manifold_governance_policies` | Lists the catalog, managed and customer-authored, with optional filters. |
 
-The `docs/` folder holds the generated reference docs, and `examples/` holds the HCL they embed.
+Reference docs in `docs/` are generated from the schema, and the HCL they embed lives in `examples/`.
 
 ## Authentication
 
-The provider authenticates as an **OIDC client** (OAuth2 client credentials). A dashboard admin creates one under **Settings → Access → Credentials → OIDC clients**. The secret is shown only once, scopes are fixed when the client is created, and there is no rotation: replace the client instead.
+The provider logs in as an OIDC client using the OAuth2 client credentials flow. A dashboard admin creates the client under Settings → Access → Credentials → OIDC clients. The dashboard shows the secret once. Scopes can't be changed after creation and secrets can't be rotated, so if either needs to change, create a new client.
 
 | Scope | Needed for |
 | --- | --- |
-| `read:policies` | data sources, plan/refresh |
-| `write:policies` | create/update/delete |
+| `read:policies` | data sources, plan, refresh |
+| `write:policies` | create, update, delete |
 
 | Attribute | Env var | Example |
 | --- | --- | --- |
@@ -26,15 +27,11 @@ The provider authenticates as an **OIDC client** (OAuth2 client credentials). A 
 | `client_id` | `MANIFOLD_CLIENT_ID` | |
 | `client_secret` | `MANIFOLD_CLIENT_SECRET` | |
 
-The provider builds the rest itself:
-- It mints a token at `https://<auth_domain>/oauth/token` with audience `<endpoint>/management/api`.
-- It calls `<endpoint>/api/management/v1`.
-- Tokens last 15 minutes and are re-minted transparently.
-- Requests that get a 429 or 5xx are retried, honouring `Retry-After`.
+You don't configure the token URL, audience or API path. The provider requests tokens from `https://<auth_domain>/oauth/token` with audience `<endpoint>/management/api` and calls the API at `<endpoint>/api/management/v1`. Tokens expire after 15 minutes and the provider fetches a new one when that happens. It retries 429 and 5xx responses and waits as long as `Retry-After` asks.
 
 ## Development
 
-Requirements: Go (see `go.mod`), OpenTofu, `jq`, and golangci-lint v2.
+You need Go (version in `go.mod`), OpenTofu, `jq` and golangci-lint v2.
 
 ```sh
 make install     # builds into $(go env GOPATH)/bin
@@ -44,7 +41,7 @@ make generate    # regenerates the API client and docs; CI fails if they drift
 make spec        # refreshes api/management-v1.yaml from ../core origin/main
 ```
 
-To run local configs against your build, point OpenTofu at it in `~/.tofurc`, or in a file named by `TF_CLI_CONFIG_FILE`:
+To run your own configs against a local build, add an override to `~/.tofurc` (or to whatever file `TF_CLI_CONFIG_FILE` points at):
 
 ```hcl
 provider_installation {
@@ -55,11 +52,11 @@ provider_installation {
 }
 ```
 
-You don't need `tofu init` for an overridden provider. Remove the override once you're done.
+Overridden providers skip `tofu init`. Take the override out when you're done, or every other config that uses this provider will pick up the dev build too.
 
 ### Testing against a dev tenant
 
-Dev instances live at `<name>.demo.manifoldsecurity.io` and issue tokens from `auth.manifoldsecurity.dev`. `sandbox` is the shared one. Create a read-only OIDC client in that instance's dashboard, then:
+Dev instances run at `<name>.demo.manifoldsecurity.io` and get tokens from `auth.manifoldsecurity.dev`. Most people share `sandbox`. Create an OIDC client with `read:policies` and `write:policies` in that instance's dashboard, then:
 
 ```sh
 export MANIFOLD_ENDPOINT=https://sandbox.demo.manifoldsecurity.io
@@ -70,15 +67,20 @@ export MANIFOLD_CLIENT_SECRET=...
 make testacc
 ```
 
-Acceptance tests (`TestAcc*`) use the real `tofu` binary and only run under `make testacc`. In CI they get the same variables from repo `vars` and `secrets`.
+The acceptance tests (`TestAcc*`) drive the real `tofu` binary and only run under `make testacc`. CI reads the same variables from the repo's `vars` and `secrets`.
+
+Each test creates the policies it needs and titles them `tf-acc-*`. A run that dies halfway can leave some behind; `make sweep` deletes them.
 
 ## Design notes
 
-- **[terraform-plugin-framework](https://developer.hashicorp.com/terraform/plugin/framework), not SDKv2.** HashiCorp recommends it for new providers, and depguard keeps SDKv2 out.
-- **Generated client.** `internal/client/client.gen.go` is generated by oapi-codegen from a vendored copy of core's management spec (`api/management-v1.yaml`). Only the operations listed in `internal/client/oapi-codegen.yaml` are generated, and the hand-written code sits next to it in `client.go`.
-- **The API sets the shape of the schema**, following the [provider design principles](https://developer.hashicorp.com/terraform/plugin/best-practices/hashicorp-provider-design-principles):
-  - `policy_id` is exposed as `id`.
-  - Timestamps are RFC 3339.
-  - A `response_message` the API leaves out reads as null.
-- **Managed policies** (`is_managed = true`) are read-only in the API. They appear in data sources but can never be managed as resources.
-- **Concurrency.** The API returns an `ETag` on every read and write and honours `If-Match` on PATCH and DELETE. Resources should send it so that concurrent dashboard edits fail with a 412 instead of being overwritten.
+The provider is built on [terraform-plugin-framework](https://developer.hashicorp.com/terraform/plugin/framework). HashiCorp recommends it over SDKv2 for new providers, and a depguard rule stops SDKv2 imports from creeping in.
+
+`internal/client/client.gen.go` is generated by oapi-codegen from `api/management-v1.yaml`, a copy of the management spec in core. Only the operations listed in `internal/client/oapi-codegen.yaml` get generated. Hand-written client code (auth, retries, paging, errors) is in `client.go` next to it.
+
+The schema stays close to the API, as the [provider design principles](https://developer.hashicorp.com/terraform/plugin/best-practices/hashicorp-provider-design-principles) suggest. The one rename is `policy_id`, which becomes `id`. Timestamps are RFC 3339, and a `response_message` the API omits shows up as null.
+
+Policies with `is_managed = true` belong to Manifold and the API won't let anyone edit or delete them. The data sources return them, but the resource refuses to import them.
+
+The resource stores the `ETag` from its last read in private state and sends it as `If-Match` on update and delete. If someone edits the policy in the dashboard between `plan` and `apply`, the apply fails rather than silently overwriting their change. Edits made before the plan just appear as drift.
+
+`severity`, `enabled`, `priority`, `action_options` and `taxonomy_mappings` have the API's defaults written into the schema. Deleting one of them from your config puts the policy back to the default instead of leaving whatever value it had last.

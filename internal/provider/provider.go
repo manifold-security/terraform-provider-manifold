@@ -131,7 +131,9 @@ func (p *manifoldProvider) Configure(ctx context.Context, req provider.Configure
 }
 
 func (p *manifoldProvider) Resources(_ context.Context) []func() resource.Resource {
-	return nil
+	return []func() resource.Resource{
+		NewGovernancePolicyResource,
+	}
 }
 
 func (p *manifoldProvider) DataSources(_ context.Context) []func() datasource.DataSource {

@@ -136,10 +136,26 @@ func (e *APIError) Error() string {
 	if e.Problem.RequestId != nil {
 		msg += fmt.Sprintf(" (request_id %s)", *e.Problem.RequestId)
 	}
+	if e.Problem.Errors != nil {
+		for _, fe := range *e.Problem.Errors {
+			msg += fmt.Sprintf("\n  %s: %s", fe.Field, fe.Code)
+			if fe.Message != nil {
+				msg += " (" + *fe.Message + ")"
+			}
+		}
+	}
 	return msg
 }
 
 func IsNotFound(err error) bool {
+	return hasStatus(err, http.StatusNotFound)
+}
+
+func IsPreconditionFailed(err error) bool {
+	return hasStatus(err, http.StatusPreconditionFailed)
+}
+
+func hasStatus(err error, status int) bool {
 	var e *APIError
-	return errors.As(err, &e) && e.StatusCode == http.StatusNotFound
+	return errors.As(err, &e) && e.StatusCode == status
 }
