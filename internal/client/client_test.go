@@ -16,6 +16,7 @@ type fakeAPI struct {
 	*httptest.Server
 	tokenCalls atomic.Int32
 	throttled  atomic.Bool
+	redirectTo string
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -67,7 +68,11 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		_ = json.NewEncoder(w).Encode(page)
 	})
 
-	mux.HandleFunc("GET /api/management/v1/governance/policies/{id}", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /api/management/v1/governance/policies/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if f.redirectTo != "" {
+			http.Redirect(w, r, f.redirectTo, http.StatusFound)
+			return
+		}
 		w.Header().Set("Content-Type", "application/problem+json")
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"type":"about:blank","title":"Not Found","status":404,"code":"policy_not_found","request_id":"req-1"}`))
@@ -130,8 +135,28 @@ func TestGetGovernancePolicyNotFound(t *testing.T) {
 	}
 }
 
-func TestNewRejectsRelativeEndpoint(t *testing.T) {
-	if _, err := New(t.Context(), Config{Endpoint: "acme.app.manifoldsecurity.io"}); err == nil {
-		t.Fatal("expected an error for an endpoint without a scheme")
+func TestNewRejectsInsecureURLs(t *testing.T) {
+	for _, cfg := range []Config{
+		{Endpoint: "acme.app.manifoldsecurity.io", TokenURL: "https://auth.manifoldsecurity.io/oauth/token"},
+		{Endpoint: "http://acme.app.manifoldsecurity.io", TokenURL: "https://auth.manifoldsecurity.io/oauth/token"},
+		{Endpoint: "https://acme.app.manifoldsecurity.io", TokenURL: "http://auth.manifoldsecurity.io/oauth/token"},
+	} {
+		if _, err := New(t.Context(), cfg); err == nil {
+			t.Errorf("expected New to reject %+v", cfg)
+		}
+	}
+}
+
+func TestRedirectsAreRefused(t *testing.T) {
+	f := newFakeAPI(t)
+	m := newTestClient(t, f)
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("redirect was followed with Authorization %q", r.Header.Get("Authorization"))
+	}))
+	t.Cleanup(elsewhere.Close)
+	f.redirectTo = elsewhere.URL
+
+	if _, err := m.GetGovernancePolicyWithResponse(t.Context(), uuid.New()); err == nil {
+		t.Fatal("expected the redirect to fail the request")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -37,9 +38,12 @@ type Manifold struct {
 }
 
 func New(ctx context.Context, cfg Config) (*Manifold, error) {
-	endpoint, err := url.Parse(strings.TrimRight(cfg.Endpoint, "/"))
-	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" {
-		return nil, fmt.Errorf("endpoint %q must be an absolute URL such as https://acme.app.manifoldsecurity.io", cfg.Endpoint)
+	endpoint, err := secureURL(strings.TrimRight(cfg.Endpoint, "/"))
+	if err != nil {
+		return nil, fmt.Errorf("endpoint: %w", err)
+	}
+	if _, err := secureURL(cfg.TokenURL); err != nil {
+		return nil, fmt.Errorf("token URL: %w", err)
 	}
 
 	cc := clientcredentials.Config{
@@ -56,6 +60,7 @@ func New(ctx context.Context, cfg Config) (*Manifold, error) {
 	// The token source outlives the Configure RPC, so it must not inherit its cancellation.
 	tokenHTTP := cleanhttp.DefaultPooledClient()
 	tokenHTTP.Timeout = 30 * time.Second
+	tokenHTTP.CheckRedirect = refuseRedirect
 	tokenCtx := context.WithValue(context.WithoutCancel(ctx), oauth2.HTTPClient, tokenHTTP)
 	ts := cc.TokenSource(tokenCtx)
 
@@ -66,8 +71,10 @@ func New(ctx context.Context, cfg Config) (*Manifold, error) {
 	retrying := retryablehttp.NewClient()
 	retrying.Logger = nil
 	retrying.RetryMax = 4
+	retrying.CheckRetry = retryPolicy
 	retrying.HTTPClient = &http.Client{
-		Timeout: 60 * time.Second,
+		Timeout:       60 * time.Second,
+		CheckRedirect: refuseRedirect,
 		Transport: &oauth2.Transport{
 			Source: ts,
 			Base:   cleanhttp.DefaultPooledTransport(),
@@ -86,6 +93,35 @@ func New(ctx context.Context, cfg Config) (*Manifold, error) {
 		return nil, err
 	}
 	return &Manifold{c}, nil
+}
+
+// secureURL accepts https, or plain http to a loopback host for local testing.
+func secureURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return nil, fmt.Errorf("%q must be an absolute URL such as https://acme.app.manifoldsecurity.io", raw)
+	}
+	if u.Scheme == "https" {
+		return u, nil
+	}
+	if ip := net.ParseIP(u.Hostname()); u.Scheme == "http" && (u.Hostname() == "localhost" || (ip != nil && ip.IsLoopback())) {
+		return u, nil
+	}
+	return nil, fmt.Errorf("%q must use https", raw)
+}
+
+var errRedirect = errors.New("refusing redirect")
+
+// The API never redirects; following one would hand the bearer token to wherever it points.
+func refuseRedirect(req *http.Request, _ []*http.Request) error {
+	return fmt.Errorf("%w to %s", errRedirect, req.URL.Redacted())
+}
+
+func retryPolicy(ctx context.Context, resp *http.Response, err error) (bool, error) {
+	if errors.Is(err, errRedirect) {
+		return false, err
+	}
+	return retryablehttp.DefaultRetryPolicy(ctx, resp, err)
 }
 
 // ListAllGovernancePolicies walks every page; params.Cursor and params.Limit are managed here.
