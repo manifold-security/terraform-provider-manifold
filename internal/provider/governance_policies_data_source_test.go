@@ -11,7 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/tfjsonpath"
 )
 
-// Reads the tenant's built-in catalog, which every instance ships with, so it needs no fixtures.
+// Relies on the tenant holding at least one alert policy.
 func TestAccGovernancePoliciesDataSource(t *testing.T) {
 	uuidRe := regexp.MustCompile(`^[0-9a-f-]{36}$`)
 
@@ -21,21 +21,21 @@ func TestAccGovernancePoliciesDataSource(t *testing.T) {
 		Steps: []resource.TestStep{
 			{
 				Config: `
-data "manifold_governance_policies" "managed" {
-  is_managed = true
+data "manifold_governance_policies" "alerts" {
+  actions = ["alert"]
 }
 
 data "manifold_governance_policy" "first" {
-  id = data.manifold_governance_policies.managed.policies[0].id
+  id = data.manifold_governance_policies.alerts.policies[0].id
 }
 `,
 				ConfigStateChecks: []statecheck.StateCheck{
-					statecheck.ExpectKnownValue("data.manifold_governance_policies.managed",
-						tfjsonpath.New("policies").AtSliceIndex(0).AtMapKey("is_managed"), knownvalue.Bool(true)),
+					statecheck.ExpectKnownValue("data.manifold_governance_policies.alerts",
+						tfjsonpath.New("policies").AtSliceIndex(0).AtMapKey("action"), knownvalue.StringExact("alert")),
 					statecheck.ExpectKnownValue("data.manifold_governance_policy.first",
 						tfjsonpath.New("id"), knownvalue.StringRegexp(uuidRe)),
 					statecheck.CompareValuePairs(
-						"data.manifold_governance_policies.managed", tfjsonpath.New("policies").AtSliceIndex(0).AtMapKey("title"),
+						"data.manifold_governance_policies.alerts", tfjsonpath.New("policies").AtSliceIndex(0).AtMapKey("title"),
 						"data.manifold_governance_policy.first", tfjsonpath.New("title"),
 						compare.ValuesSame()),
 				},
