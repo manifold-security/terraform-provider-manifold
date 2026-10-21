@@ -1,0 +1,4704 @@
+openapi: 3.0.3
+info:
+  title: Manifold Management API
+  version: 1.0.0
+  description: |
+    Management surface for Manifold customers.
+
+    ## Authentication
+
+    The Management API accepts **only** the OAuth 2.0 **client credentials**
+    grant — machine-to-machine (M2M) access tokens. There is no interactive
+    path: dashboard session cookies are **not** accepted and are rejected at
+    the gateway, so this API cannot be called from a browser session. You
+    authenticate with a machine-to-machine (M2M) client whose `client_id` and
+    `client_secret` are issued when an administrator creates an OIDC client in
+    the Manifold dashboard (the secret is shown only once, at creation).
+
+    ### 1. Request an access token
+
+    Exchange the client credentials for a JWT at Manifold's authentication
+    host, `auth.manifoldsecurity.io` — the same host you sign in through. Use
+    it exactly as shown; do not substitute your own subdomain. Only the
+    `audience` and the API request host below use your Manifold domain.
+
+    ```bash
+    curl -X POST https://auth.manifoldsecurity.io/oauth/token \
+      -H 'content-type: application/json' \
+      -d '{
+        "grant_type": "client_credentials",
+        "client_id": "<client_id>",
+        "client_secret": "<client_secret>",
+        "audience": "https://<your-manifold-domain>/management/api",
+        "organization": "<your-org-id>"
+      }'
+    ```
+
+    - **`client_id` / `client_secret`** — returned (once) when you create an
+      OIDC client in the Manifold dashboard.
+    - **`audience`** — `https://<your-manifold-domain>/management/api`, where
+      `<your-manifold-domain>` is the host you reach Manifold on (the same one
+      in the request URLs below). Required: it selects the Management API.
+    - **`organization`** — your Manifold organization id (`org_...`), shown in
+      the dashboard. Required: it scopes the token to your tenant.
+
+    The response contains an `access_token` (a JWT) valid for ~15 minutes. M2M
+    tokens are not refreshable — request a new one when it expires. A single
+    token grants access to the entire Management API.
+
+    ### 2. Call the API
+
+    Send the token as a Bearer credential on every request. The Management API
+    is served under the `/api` prefix on your Manifold domain:
+
+    ```bash
+    curl https://<your-manifold-domain>/api/management/v1/inventory \
+      -H 'authorization: Bearer <access_token>'
+    ```
+
+servers:
+  - url: /management/v1
+    description: Management API v1
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Management
+    description: Management API endpoints.
+  - name: Activity
+    description: Trace and event activity.
+  - name: Risks
+    description: The risk posture — risks paired with the assets their impacted agents group under.
+  - name: Threats
+    description: Threat findings.
+  - name: Inventory
+    description: Inventory of discovered entities (agents, MCP servers, skills, endpoints, users, models, tools, resources).
+  - name: Devices
+    description: Enrolled device fleet (list, disable/enable, revoke/reactivate). Proxied to auth-api.
+  - name: Governance
+    description: Policies evaluated against agent activity, and the violations they produce.
+  - name: Audit
+    description: Changes recorded through the API, across every domain.
+
+paths:
+  /audit-logs:
+    get:
+      operationId: listAuditLogs
+      security:
+        - oauth2: [read:audit-logs]
+      summary: List audit-log entries.
+      description: |
+        Every change recorded through the API, newest first: who changed what,
+        when, and from which value to which. One entry per change, across every
+        domain.
+
+        This is the cross-domain feed and it reads with `read:audit-logs`. A
+        client scoped to one domain reads that domain's trail from the domain's
+        own sub-resource instead — `GET /risks/{riskId}/audit-logs` under
+        `read:risks` — which needs no access to anything else.
+
+        `changes` is the payload the writer recorded, passed through as stored. Its
+        shape follows the action that produced it, so treat it as diagnostic detail
+        rather than a stable contract; `entity_type`, `entity_id` and `action` are
+        the fields to key logic on.
+
+        ## Extracting continuously
+
+        Walk with `sort_order=asc` and keep the last `next_cursor`: entries are
+        ordered by `(created_at, id)`, so resuming from it returns exactly what was
+        written since, with no overlap and nothing skipped. `created_at_gte` sets
+        where a first walk starts.
+
+        Unlike the other lists here, a page carries `next_cursor` even once you have
+        caught up — it is a resume position, not a promise of more. `has_next` is the
+        "more right now" signal, so loop on that; a loop that runs while
+        `next_cursor` is present never ends.
+
+        Rows are never edited or deleted in place, so a page already walked cannot
+        change underneath a cursor. Note that `created_at` is the time the change
+        was recorded, and entries become visible when their transaction commits —
+        so an entry can appear with a timestamp slightly behind one already
+        returned. Resuming from a cursor is unaffected (the keyset is a position,
+        not a clock), but a walk pinned with `created_at_gte` to "now" can miss a
+        commit still in flight. Leave a minute of overlap if you pin by time
+        rather than by cursor.
+      tags: [Audit]
+      parameters:
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: entity_type
+          in: query
+          description: |
+            Filter to these entity types (exact match, e.g. `risk_profile`,
+            `threat`, `inventory`). Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: entity_id
+          in: query
+          description: |
+            Filter to these entity identifiers. Repeatable; values OR together.
+            Identifiers are only unique within a type, so pair it with
+            `entity_type` to address one entity.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: action
+          in: query
+          description: Filter to these actions. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: actor
+          in: query
+          description: |
+            Filter to these actors, matched on the whole `<kind>:<id>` string as
+            reported. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: created_at_gte
+          in: query
+          description: Only entries recorded at or after this instant.
+          schema: { type: string, format: date-time }
+        - name: created_at_lte
+          in: query
+          description: Only entries recorded at or before this instant.
+          schema: { type: string, format: date-time }
+        - name: sort_order
+          in: query
+          description: |
+            Ordering by `created_at`. Defaults to `desc`, newest first; `asc` is
+            the one to walk for a continuous extraction.
+          schema: { $ref: "#/components/schemas/SortOrder" }
+      responses:
+        "200":
+          description: A page of audit-log entries.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditLogEntryList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /events/{eventId}:
+    get:
+      operationId: getEvent
+      security:
+        - oauth2: [read:traces]
+      summary: Get a single event by ID.
+      description: |
+        Returns a single event by its identifier. Scoped to the same agentic
+        activity surface as `/traces`: only events whose `event_name` belongs
+        to the agentic set (LLM, agent, tool, MCP, retrieval, memory) are
+        returned. Looking up an event that exists in storage but falls
+        outside this surface (e.g. EDR-only telemetry) yields `404
+        event_not_found` — the management API does not expose non-agentic
+        events.
+      tags: [Activity]
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          description: Event identifier (16 alphanumeric characters).
+          schema: { type: string }
+      responses:
+        "200":
+          description: Event detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Event" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /openapi.json:
+    get:
+      operationId: getOpenAPISpecJSON
+      security:
+        - oauth2: [read:metadata]
+      summary: Download the management API OpenAPI specification (JSON).
+      tags: [Management]
+      responses:
+        "200":
+          description: OpenAPI spec as JSON.
+          content:
+            application/json:
+              schema: { type: object }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /traces:
+    get:
+      operationId: listTraces
+      security:
+        - oauth2: [read:traces]
+      summary: List traces with cursor pagination and filtering.
+      description: |
+        Returns a page of trace summaries ordered by `sort_by` / `sort_order`
+        (default `last_event_time` descending) with `trace_id` as tiebreaker.
+        Pagination is bidirectional (see `cursor`).
+
+        Only traces containing at least one agentic event are surfaced.
+
+        Summaries are served from a precomputed per-trace rollup, refreshed
+        continuously rather than on read: a trace whose events have just been
+        ingested can take up to a minute to appear here, and a trace already
+        listed can report counts and timestamps that trail its newest events by
+        the same margin. `GET /traces/{traceId}` reads the events directly and
+        has no such lag, so use it when you need the authoritative timeline.
+
+        `start_time_gte` / `start_time_lte` bound the trace's span rather than
+        its individual events: a trace matches when its first-to-last event
+        interval intersects the window, so a long-running trace can match a
+        window that contains none of its events.
+      tags: [Activity]
+      parameters:
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: source
+          in: query
+          description: Filter by event source. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/EventSourceInput" }
+        - name: inventory_uri
+          in: query
+          description: Filter to traces containing events linked to these inventory entities (exact URI match). Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: start_time_gte
+          in: query
+          description: Inclusive lower bound on the trace's span; a trace matches when its first-to-last event interval intersects the window.
+          schema: { type: string, format: date-time }
+        - name: start_time_lte
+          in: query
+          description: Inclusive upper bound on the trace's span (see `start_time_gte`).
+          schema: { type: string, format: date-time }
+        - name: q
+          in: query
+          description: |
+            Free-text search across the trace id, its displayed actor, and the
+            names of the inventory entities linked to it.
+          schema: { type: string }
+        - name: sort_by
+          in: query
+          description: Field to sort by. Defaults to `last_event_time`.
+          schema: { $ref: "#/components/schemas/TraceSortBy" }
+        - $ref: "#/components/parameters/SortOrderParam"
+      responses:
+        "200":
+          description: Trace list page.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TraceList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /traces/{traceId}:
+    get:
+      operationId: getTrace
+      security:
+        - oauth2: [read:traces]
+      summary: Get a trace with its full event timeline.
+      tags: [Activity]
+      parameters:
+        - name: traceId
+          in: path
+          required: true
+          description: Trace identifier.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Trace detail with embedded event timeline.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Trace" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /risk-posture:
+    get:
+      operationId: listRiskPosture
+      security:
+        - oauth2: [read:risks]
+      summary: List the current risk posture.
+      description: |
+        The current risk posture, one entry per (risk, asset) pair: each risk's
+        affected agents are partitioned by the asset they are affected through.
+
+        HYG-016 flags an agent when one of its MCP servers grants broad
+        permissions. An agent with two such servers is affected through both, so it
+        appears in both entries — which is why an entry's `impacted_agents_count`
+        is that asset's own figure and the entries do not sum to the risk's total.
+        Agents affected through no asset are collected in one entry whose
+        `asset_uri` is the empty string, so every affected agent is accounted for
+        exactly once.
+
+        A risk that does not partition its agents by an asset has exactly one
+        entry, and so does a risk with nothing affected (count 0, status
+        `resolved`).
+
+        `status` is the entry's own state, not the risk's:
+
+        - `active` — the entry still has affected agents
+        - `ignored` — you have suppressed this risk, or this entry's asset
+        - `resolved` — nothing is affected through this asset any more
+
+        Suppressing one asset marks only its entry `ignored`; the risk's other
+        entries stay `active`. It does not change `impacted_agents_count` either —
+        the agents are still affected, so the entry is hidden from your working set
+        rather than emptied.
+
+        For the risk itself — its narrative text and its whole-risk count — see
+        `GET /risks/{riskId}`. It is a different resource, not this entry's
+        element: an entry is scoped to one asset, a risk is not.
+      tags: [Risks]
+      parameters:
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: risk_id
+          in: query
+          description: |
+            Filter to these risks (exact match on the risk's identifier).
+            Repeatable; values OR together. Pair it with `asset_uri` to address a
+            single entry.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: asset_uri
+          in: query
+          # Required for the empty-string member of the partition: without it the
+          # validator rejects `?asset_uri=` before the handler runs, and the entry
+          # collecting agents affected through no asset becomes unselectable.
+          allowEmptyValue: true
+          description: |
+            Filter to the entries for these assets (exact match on `asset_uri`).
+            Repeatable; values OR together. Pass the empty string to select the
+            entry that collects agents affected through no asset — the same value
+            that entry reports, so a value taken from a response can be sent back
+            unchanged.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: status
+          in: query
+          description: Filter by the row's derived status. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/RiskStatus" }
+        - name: severity
+          in: query
+          description: Filter by the risk's severity. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/SeverityInput" }
+        - name: category
+          in: query
+          description: >-
+            Filter by the risk's posture category, matched exactly against these
+            uppercase codes: `SUPPLY_CHAIN`, `PERMISSIONS`, `CONTAINMENT`,
+            `CONTEXT`, `DATA_PROTECTION`, `IDENTITY`, `MONITORING`. Repeatable;
+            values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: risk_factor
+          in: query
+          description: Filter by the factor the risk contributes to. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: asset_type
+          in: query
+          description: |
+            Narrow to risks that partition their agents by one of these asset
+            types. Repeatable; values OR together. A risk that does not partition
+            by an asset drops out.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/InventoryType" }
+        - name: agent_uri
+          in: query
+          description: |
+            Narrow to the rows currently flagging any of these agents. Matches
+            only the live, unsuppressed impacts a row's count is built from, so a
+            risk that no longer flags the agent drops out and a risk that groups
+            keeps only the asset rows the agent is flagged through.
+            `impacted_agents_count` still describes the whole row, not just these
+            agents. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: framework
+          in: query
+          description: Filter to risks mapping to this taxonomy code (e.g. `OWASP-ASI02`). Free-form; an unknown code matches nothing.
+          schema: { type: string }
+        - name: q
+          in: query
+          description: Free-text search across risk id, title, and description.
+          schema:
+            type: string
+            maxLength: 200
+        - name: sort_by
+          in: query
+          description: Field to sort by. Defaults to `severity`.
+          schema: { $ref: "#/components/schemas/RiskSortBy" }
+        - $ref: "#/components/parameters/SortOrderParam"
+      responses:
+        "200":
+          description: Risk posture page.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RiskPostureEntryList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /risks/batch:
+    post:
+      operationId: batchUpdateRisks
+      security:
+        - oauth2: [write:risks]
+      summary: Suppress or un-suppress many risks.
+      description: |
+        Applies one status to many risks in a single call. The scope is always the
+        whole risk — the narrower scopes exist on `PATCH /risks/{riskId}`, where the
+        asset and agents can be named — so this also stops the detection pipeline
+        evaluating each suppressed risk, the same way a risk-wide PATCH does.
+
+        Risks absent from the catalog are reported in `skipped[]` with reason
+        `not_found` rather than failing the call: the operation is idempotent and
+        returns 200 even when some ids do not match, so a caller replaying a list it
+        captured earlier does not have to pre-filter it.
+
+        `reason` is required when suppressing, as on the single-risk PATCH.
+      tags: [Risks]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RiskBatchUpdate" }
+      responses:
+        "200":
+          description: Batch update summary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RiskBatchUpdateResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /risks/{riskId}:
+    get:
+      operationId: getRisk
+      security:
+        - oauth2: [read:risks]
+      summary: Get one risk.
+      description: |
+        Returns the risk itself: its narrative text, and how many agents it
+        affects in total.
+
+        `impacted_agents_count` counts each affected agent once, however many
+        assets it is affected through.
+
+        This endpoint takes no asset parameter. The narrative text is the same
+        whichever asset you arrived from, so scoping it would change only the
+        counts beside it — per-asset figures belong to the posture
+        (`GET /risk-posture`), which is also where a single entry is addressed.
+
+        A risk with nothing affected reports zero agents and status `resolved`.
+        Only an unknown risk is a 404.
+      tags: [Risks]
+      parameters:
+        - name: riskId
+          in: path
+          required: true
+          description: The risk's identifier (e.g. `HYG-016`).
+          schema: { type: string }
+      responses:
+        "200":
+          description: Risk detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Risk" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    patch:
+      operationId: updateRisk
+      security:
+        - oauth2: [write:risks]
+      summary: Suppress a risk, or retune its severity.
+      description: |
+        Partial edit of one risk. Send `status` to suppress or un-suppress it,
+        `severity` to retune it, or both; at least one is required.
+
+        ## Severity
+
+        `severity` retunes the risk itself, so it always applies risk-wide — sending
+        it together with `agent_uris` or `asset_uri` is rejected. Severity is
+        resolved when a risk is read rather than stamped onto each affected agent,
+        so the change applies to the agents already affected and historical severity
+        breakdowns re-bucket accordingly.
+
+        ## Status
+
+        `status` accepts `active` or `ignored`; `resolved` is derived from whether
+        anything is still affected and is rejected here. `reason` is required when
+        suppressing.
+
+        Which scope you suppress is picked by what you send:
+
+        | `agent_uris` | `asset_uri` | scope |
+        |---|---|---|
+        | — | — | the whole risk |
+        | set | — | those agents, under every asset |
+        | — | set | that asset, every agent |
+        | set | set | those agents, under that one asset |
+
+        The last row is how you accept one agent's use of one risky asset while the
+        asset stays flagged for everyone else.
+
+        Suppressing the **whole risk** also stops the detection pipeline evaluating
+        it — that is what makes it different in kind from the narrower scopes, which
+        are read-time suppression with detection still running underneath. Expect a
+        risk-wide suppression to stop producing newly affected agents entirely.
+
+        Suppressions are stored as intent rather than stamped onto what is affected
+        today, so an agent that later starts being affected through a suppressed
+        asset is suppressed too.
+
+        **The entry whose `asset_uri` is the empty string cannot be suppressed on
+        its own.** The suppression ledger spells "not scoped by asset" as the empty
+        string, so it cannot tell that apart from "the entry with no asset";
+        `asset_uri: ""` here therefore means the whole risk, not that entry. Suppress
+        its agents individually with `agent_uris` instead.
+      tags: [Risks]
+      parameters:
+        - name: riskId
+          in: path
+          required: true
+          description: The risk's identifier (e.g. `HYG-016`).
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RiskUpdate" }
+      responses:
+        "200":
+          description: |
+            The risk after the edit. A narrower suppression does not show up here —
+            it changes one posture entry, which `GET /risk-posture` reports.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Risk" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /risks/{riskId}/agents:
+    get:
+      operationId: listRiskAgents
+      security:
+        - oauth2: [read:risks]
+      summary: List the agents a risk affects.
+      description: |
+        Every agent this risk affects, one row per agent however many assets it is
+        affected through. Those assets are on the row, in `asset_uris`.
+
+        `status` is the agent's state for this risk across every asset:
+
+        - `active` — at least one asset still affects it and you have not suppressed
+          that one
+        - `ignored` — every asset still affecting it is covered by a suppression
+          (this agent's, that asset's, or the whole risk's, including a risk disabled
+          outside this API)
+        - `resolved` — nothing affects it any more
+
+        An agent stays `active` while any one asset is unsuppressed, so suppressing
+        a single asset narrows what is outstanding without dropping the agent.
+
+        Suppressed agents are listed rather than hidden — filter with
+        `?status=active` for the outstanding set. Because of that, the number of rows
+        here need not equal a posture entry's `impacted_agents_count`: that count
+        drops agents suppressed individually, while this list still shows them. See
+        `GET /risk-posture` for why an asset-wide suppression hides an entry instead
+        of emptying it.
+      tags: [Risks]
+      parameters:
+        - name: riskId
+          in: path
+          required: true
+          description: The risk's identifier (e.g. `HYG-016`).
+          schema: { type: string }
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: agent_uri
+          in: query
+          description: |
+            Filter to these agents (exact match on `agent_uri`). Repeatable; values
+            OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: asset_uri
+          in: query
+          # Same reason as the posture's: without it the validator rejects
+          # `?asset_uri=` and agents affected outside any asset become unselectable.
+          allowEmptyValue: true
+          description: |
+            Filter to agents affected through any of these assets (exact match on a
+            member of `asset_uris`). Repeatable; values OR together. Pass the empty
+            string for the agents affected outside any asset.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: status
+          in: query
+          description: Filter by the agent's status for this risk. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/RiskStatus" }
+        - name: sort_by
+          in: query
+          schema: { $ref: "#/components/schemas/RiskAgentSortBy" }
+        - name: sort_order
+          in: query
+          schema: { $ref: "#/components/schemas/SortOrder" }
+      responses:
+        "200":
+          description: A page of affected agents.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RiskAgentList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /risks/{riskId}/evidence:
+    get:
+      operationId: getRiskEvidence
+      security:
+        - oauth2: [read:risks]
+      summary: Get why one agent is affected, under one asset.
+      description: |
+        The evidence the detection pipeline recorded for one (risk, agent, asset)
+        triple: what it observed that made this agent affected there.
+
+        The triple is the whole address, so both `agent_uri` and `asset_uri` are
+        required. Take them from `GET /risks/{riskId}/agents`: an agent's row carries
+        every asset it is affected through, and the empty string when it is affected
+        outside any asset — pass `?asset_uri=` for that one.
+
+        Evidence is per asset, not per agent: an agent affected through two assets
+        has two separate pieces of evidence, one per asset, which is why this is not
+        a field on the agent row.
+
+        `evidence` is shaped by the risk that produced it, so it is an open object
+        rather than a fixed schema. It is diagnostic detail, not a stable contract —
+        do not key logic on its inner fields.
+
+        A 404 means no such triple, and its `code` says which kind:
+        `risk_not_found` for an unknown risk, `evidence_not_found` when the risk
+        exists but affects nothing at that address — an agent it never affected, or
+        one it does not affect through that asset. Those last two are not
+        distinguished from each other.
+      tags: [Risks]
+      parameters:
+        - name: riskId
+          in: path
+          required: true
+          description: The risk's identifier (e.g. `HYG-016`).
+          schema: { type: string }
+        - name: agent_uri
+          in: query
+          required: true
+          description: The affected agent's URI.
+          schema: { type: string }
+        - name: asset_uri
+          in: query
+          required: true
+          allowEmptyValue: true
+          description: |
+            The asset the agent is affected through. Pass the empty string for the
+            evidence recorded outside any asset.
+          schema: { type: string }
+      responses:
+        "200":
+          description: The evidence for that triple.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RiskEvidence" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /risks/{riskId}/audit-logs:
+    get:
+      operationId: listRiskAuditLogs
+      security:
+        - oauth2: [read:risks]
+      summary: List one risk's audit trail.
+      description: |
+        Every change recorded against this risk, newest first — the same entries
+        the cross-domain feed carries for it, scoped to one risk and readable with
+        `read:risks` alone.
+
+        Entries cover the risk itself: suppressions and their scope, severity
+        retunes, and what the detection pipeline recorded against it. `entity_type`
+        is `risk_profile` on every entry, and `entity_id` is the risk's id.
+
+        A risk that has never been edited returns an empty page; only an unknown
+        risk is a 404.
+
+        See `GET /audit-logs` for the payload shape and for how to walk a
+        continuous extraction — the paging contract is identical.
+      tags: [Risks]
+      parameters:
+        - name: riskId
+          in: path
+          required: true
+          description: The risk's identifier (e.g. `HYG-016`).
+          schema: { type: string }
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: action
+          in: query
+          description: Filter to these actions. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: created_at_gte
+          in: query
+          description: Only entries recorded at or after this instant.
+          schema: { type: string, format: date-time }
+        - name: created_at_lte
+          in: query
+          description: Only entries recorded at or before this instant.
+          schema: { type: string, format: date-time }
+        - name: sort_order
+          in: query
+          description: Ordering by `created_at`. Defaults to `desc`, newest first.
+          schema: { $ref: "#/components/schemas/SortOrder" }
+      responses:
+        "200":
+          description: A page of this risk's audit-log entries.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditLogEntryList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /governance/policies:
+    post:
+      operationId: createGovernancePolicy
+      security:
+        - oauth2: [write:policies]
+      summary: Author a governance policy.
+      description: |
+        Creates a policy this organization owns. Its id is an opaque uuid minted
+        by the server and returned in the response — there is no client-chosen id.
+        A governance policy carries no catalog code.
+
+        `cedar_policy` is required: it is the rule the policy is evaluated from,
+        and one without it can never match. To stage a policy before it takes
+        effect, create it with `enabled: false` and flip it when ready.
+
+        The rule is parsed on the way in — a malformed expression is a 400 and
+        nothing is written — and the assets it names are derived from it.
+
+        A created policy is always customer-authored (`is_managed: false`) and may
+        be set to any `GovernanceAction`. `correct` and `advise` hand the model
+        the policy's `response_message`, so they require a non-blank one — a 400
+        otherwise. `owner` records the client that created it.
+      tags: [Governance]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GovernancePolicyCreate" }
+      responses:
+        "201":
+          description: The created policy.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GovernancePolicy" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    get:
+      operationId: listGovernancePolicies
+      security:
+        - oauth2: [read:policies]
+      summary: List governance policies.
+      description: |
+        The governance catalog: the policies evaluated against agent activity, and
+        what each one does when it matches.
+
+        `action` is what the policy does on a match — `alert` records the match,
+        `block` denies the tool call or prompt in flight; see `GovernanceAction`
+        for the rest.
+
+        `enabled` is whether the policy is evaluated at all. A disabled policy
+        matches nothing and produces no violations, and stays in the catalog.
+
+        Policies a customer authored and Manifold's built-ins live in the same list;
+        `is_managed` tells them apart. Only the former can be edited or deleted.
+
+        For what a policy has actually caught, see `GET /v2/governance/violations`
+        — the violation feed is not part of this surface.
+      tags: [Governance]
+      parameters:
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: policy_id
+          in: query
+          description: Filter to these policies (exact match). Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string, format: uuid }
+        - name: category
+          in: query
+          description: Filter by category. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/GovernancePolicyCategory" }
+        - name: severity
+          in: query
+          description: Filter by severity. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/SeverityInput" }
+        - name: action
+          in: query
+          description: Filter by the action the policy takes on a match. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/GovernanceAction" }
+        - name: enabled
+          in: query
+          description: Filter to policies that are (or are not) evaluated.
+          schema: { type: boolean }
+        - name: is_managed
+          in: query
+          description: Filter to Manifold-managed policies, or to customer-authored ones.
+          schema: { type: boolean }
+        - name: framework
+          in: query
+          description: Filter to policies mapping to this taxonomy code (e.g. `OWASP-ASI02`).
+          schema: { type: string }
+        - name: q
+          in: query
+          description: Case-insensitive substring match on policy id, title, or description.
+          schema: { type: string }
+        - name: sort_by
+          in: query
+          schema: { $ref: "#/components/schemas/GovernancePolicySortBy" }
+        - name: sort_order
+          in: query
+          schema: { $ref: "#/components/schemas/SortOrder" }
+      responses:
+        "200":
+          description: A page of governance policies.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GovernancePolicyList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /governance/policies/batch:
+    post:
+      operationId: batchUpdateGovernancePolicies
+      security:
+        - oauth2: [write:policies]
+      summary: Enable, disable, retune, or delete many policies at once.
+      description: |
+        Applies the same change to many policies in one call. Send `enabled`,
+        `action`, `priority`, or `delete`; at least one is required.
+
+        Deliberately narrower than `PATCH`: a batch changes how policies enforce,
+        never what they say. Text, severity and the rule itself are per-policy
+        edits.
+
+        Setting `action` to `correct` or `advise` is a 400, and nothing is
+        applied, when any named policy has no `response_message`.
+
+        `delete: true` retires every named policy instead of changing how it
+        enforces, and cannot be combined with `enabled`, `action` or `priority`.
+        It is the same soft delete as `DELETE /governance/policies/{policyId}`:
+        the policies stop being evaluated from the next event onward, the
+        violations they already caught stay, and each keeps its audit trail at
+        `GET /governance/policies/{policyId}/audit-logs`.
+
+        Ids that cannot be applied are reported in `skipped[]` rather than failing
+        the call, so replaying a list captured earlier does not require
+        pre-filtering it — `not_found` for an id no live policy carries and
+        `managed` for a Manifold-maintained one. A duplicated id appears at most
+        once.
+
+        Either every applicable policy changes or none does: the writes and their
+        audit entries share one transaction.
+      tags: [Governance]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GovernancePolicyBatchUpdate" }
+      responses:
+        "200":
+          description: |
+            The batch outcome. A 200 with a fully populated `skipped[]` means
+            nothing was applied — check it rather than assuming success.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GovernancePolicyBatchUpdateResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /governance/policies/{policyId}:
+    get:
+      operationId: getGovernancePolicy
+      security:
+        - oauth2: [read:policies]
+      summary: Get one governance policy.
+      description: |
+        The policy, plus the text explaining what it detects and why it matters, and
+        the Cedar expression it is evaluated from.
+
+        `cedar_policy` is the authored source of the rule. It is present on
+        customer-authored policies; a managed policy may keep its expression
+        internal, in which case the field is absent rather than empty.
+      tags: [Governance]
+      parameters:
+        - name: policyId
+          in: path
+          required: true
+          description: The policy's identifier, an opaque uuid.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Policy detail.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GovernancePolicy" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    patch:
+      operationId: updateGovernancePolicy
+      security:
+        - oauth2: [write:policies]
+      summary: Edit one governance policy.
+      description: |
+        Partial edit: send only the fields to change, at least one of them.
+        Everything else is left as it stands.
+
+        ## What can be edited, and on which policies
+
+        Only a policy this organization authored (`is_managed: false`) can be
+        edited. A Manifold-maintained policy is refused with 403
+        `policy_managed`, including a request that would only enable or disable
+        it — its lifecycle belongs to the catalog it ships with.
+
+        `cedar_policy` replaces the rule the policy is evaluated from. It is
+        parsed on the way in — a malformed expression is a 400 and nothing is
+        written — and the assets it names are re-derived from it, so a rule that
+        stops naming an asset stops targeting it.
+
+        `response_message` is what a blocked agent is told. It is a template and
+        is rendered on the way in to catch a bad placeholder before an agent ever
+        sees it. A `correct` or `advise` policy must keep a non-blank one: an edit
+        that sets either action on a policy without a message, or blanks the
+        message on such a policy, is a 400.
+
+        The edit and its audit entry share one transaction, so a recorded change
+        is a change that happened.
+
+        ## Concurrency
+
+        Send `If-Match` with the `ETag` from the read this edit is based on and
+        the write applies only if nobody has changed the policy since; a stale
+        version is refused with 412 and nothing is written. Without the header
+        the edit is unconditional and the last writer wins.
+
+        An edit that changes nothing does not move the version, so the `ETag`
+        comes back unchanged.
+      tags: [Governance]
+      parameters:
+        - name: policyId
+          in: path
+          required: true
+          description: The policy's identifier, an opaque uuid.
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IfMatchParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GovernancePolicyUpdate" }
+      responses:
+        "200":
+          description: The policy after the edit.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GovernancePolicy" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { $ref: "#/components/responses/PreconditionFailed" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      operationId: deleteGovernancePolicy
+      security:
+        - oauth2: [write:policies]
+      summary: Delete one governance policy.
+      description: |
+        Deletes a policy this organization authored. A Manifold-maintained one is
+        refused with 403 `policy_managed`.
+
+        The policy stops being evaluated from the next event onward, and stops
+        appearing in the catalog. What it already produced stays: the violations it
+        caught record what happened, and deleting the rule does not unmake those
+        events.
+
+        Its audit trail also survives, at the same address — `GET
+        /governance/policies/{policyId}/audit-logs` keeps answering for a deleted
+        policy, and the deletion is the last entry on it. That is deliberate: the
+        record of a policy going away is the one thing you would most want to read
+        afterwards, and requiring the cross-domain feed for it would mean needing
+        `read:audit-logs` to learn what happened to your own policy.
+
+        Deleting is idempotent only in effect, not in status: a second delete of
+        the same id is a 404, since the policy is no longer there to delete.
+
+        ## Concurrency
+
+        Send `If-Match` with the `ETag` from the read this delete is based on and
+        the policy goes only if nobody has changed it since; a stale version is
+        refused with 412 and the policy stays. Without the header the delete is
+        unconditional.
+      tags: [Governance]
+      parameters:
+        - name: policyId
+          in: path
+          required: true
+          description: The policy's identifier, an opaque uuid.
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IfMatchParam"
+      responses:
+        "204":
+          description: The policy is gone.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { $ref: "#/components/responses/PreconditionFailed" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /governance/policies/{policyId}/audit-logs:
+    get:
+      operationId: listGovernancePolicyAuditLogs
+      security:
+        - oauth2: [read:policies]
+      summary: List one policy's audit trail.
+      description: |
+        Every change recorded against this policy, newest first — the same entries
+        the cross-domain feed carries for it, scoped to one policy and readable with
+        `read:policies` alone.
+
+        `entity_type` is `governance_policy` on every entry, and `entity_id` is the
+        policy's id.
+
+        A policy nobody has edited returns an empty page; only an id no policy has
+        ever carried is a 404. A deleted policy keeps its trail here — see
+        `DELETE`.
+
+        See `GET /audit-logs` for the payload shape and for how to walk a
+        continuous extraction — the paging contract is identical.
+      tags: [Governance]
+      parameters:
+        - name: policyId
+          in: path
+          required: true
+          description: The policy's identifier, an opaque uuid.
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: action
+          in: query
+          description: Filter to these actions. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: created_at_gte
+          in: query
+          description: Only entries recorded at or after this instant.
+          schema: { type: string, format: date-time }
+        - name: created_at_lte
+          in: query
+          description: Only entries recorded at or before this instant.
+          schema: { type: string, format: date-time }
+        - name: sort_order
+          in: query
+          description: Ordering by `created_at`. Defaults to `desc`, newest first.
+          schema: { $ref: "#/components/schemas/SortOrder" }
+      responses:
+        "200":
+          description: A page of this policy's audit-log entries.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditLogEntryList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /governance/violations:
+    get:
+      operationId: listGovernanceViolations
+      security:
+        - oauth2: [read:policy-violations]
+      summary: List governance violations.
+      description: |
+        Every time a policy matched: one entry per firing — per (policy, trace,
+        event) — newest first. Repeated attempts against the same policy in the
+        same trace are separate entries, because each one is a thing the agent
+        actually did.
+
+        `enforcement` is what happened **at that moment**: `block` means the tool
+        call or prompt was denied in flight, `correct` that it was stopped and the
+        model handed the policy's message to retry with, `advise` that it ran with
+        the message added to the model's context, and `alert` that it was recorded
+        and allowed. It is a snapshot taken when the policy fired, so it can differ
+        from the policy's current `action` — an entry saying `alert` on a policy
+        that now blocks is history, not a contradiction. To see what the policy
+        does today, read the policy.
+
+        A `block` policy can therefore legitimately record `alert`, and there are
+        two ways that happens. One is the OTel ingest path, which observes events
+        after the fact and can never deny. The other is a **tool call on a browser
+        surface** (`claude-web`, `chatgpt-web`, `claude-code-web`,
+        `claude-cowork-web`, `gemini-web`, `replit-web`, `perplexity-web`,
+        `m365-copilot-web`): the provider executes the tool on its own servers, so
+        by the time the event arrives the action has already happened — the
+        extension warns the user and records the finding, and nothing was stopped.
+        Reading those entries as prevented actions would overstate what happened.
+        Prompt and site-visit firings on those same surfaces DO record `block`:
+        a denied prompt never leaves the browser, and a denied visit never loads
+        the page. The exception is a prompt on `replit-web`, which has already
+        left by the time the verdict lands and so records `alert`. Tool calls from a CLI agent also record `block` — there the
+        hook gates execution before the tool runs.
+
+        When a firing records something other than the policy's action at that
+        moment, `fallback_reason` says why: for example `no_model_channel` for an
+        `advise` the agent could not read, or `already_ran` for the browser tool
+        call above.
+
+        `event_id` addresses the event that triggered it: `GET /events/{eventId}`
+        has the full payload, and `trace_id` groups the firing with everything else
+        the agent did in that run.
+
+        A deleted policy keeps the violations it produced — they record what
+        happened, and removing the rule does not unmake the events it caught — so
+        `policy_id` here may name a policy the catalog no longer lists.
+      tags: [Governance]
+      parameters:
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: policy_id
+          in: query
+          description: Filter to violations produced by these policies. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: trace_id
+          in: query
+          description: Filter to these traces. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: actor
+          in: query
+          description: Filter to these actors, as reported on the firing. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: asset_uri
+          in: query
+          description: Filter to violations on these assets. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: enforcement
+          in: query
+          description: Filter by what happened at firing time. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/GovernanceAction" }
+        - name: severity
+          in: query
+          description: |
+            Filter by the firing policy's severity, as it stands now. Repeatable;
+            values OR together. Severity lives on the policy, not on the firing, so
+            retuning a policy moves its past firings between the buckets here — and
+            a firing whose policy the catalog no longer holds matches no value.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/SeverityInput" }
+        - name: created_at_gte
+          in: query
+          description: Only violations recorded at or after this instant.
+          schema: { type: string, format: date-time }
+        - name: created_at_lte
+          in: query
+          description: Only violations recorded at or before this instant.
+          schema: { type: string, format: date-time }
+        - name: sort_order
+          in: query
+          description: |
+            Ordering by `created_at`. Defaults to `desc`, newest first; `asc` is
+            the one to walk for a continuous extraction, exactly as on
+            `GET /audit-logs`.
+          schema: { $ref: "#/components/schemas/SortOrder" }
+      responses:
+        "200":
+          description: A page of violations.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GovernanceViolationList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /governance/violations/{violationId}:
+    get:
+      operationId: getGovernanceViolation
+      security:
+        - oauth2: [read:policy-violations]
+      summary: Get one governance violation.
+      description: |
+        One firing, by its own identifier. The same entry the list returns — the
+        detail exists so a violation quoted elsewhere (a webhook, a ticket) can be
+        fetched without unwrapping a page.
+      tags: [Governance]
+      parameters:
+        - name: violationId
+          in: path
+          required: true
+          description: The violation's identifier, as reported in `violation_id`.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The violation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GovernanceViolation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /threats:
+    get:
+      operationId: listThreats
+      security:
+        - oauth2: [read:threats]
+      summary: List threats with cursor pagination and filtering.
+      description: |
+        Returns a page of threat findings ordered by `sort_by` / `sort_order`
+        (default `first_seen_at` descending) with `id` as tiebreaker.
+        Pagination is bidirectional (see `cursor`).
+      tags: [Threats]
+      parameters:
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: status
+          in: query
+          description: |
+            Filter by status. Repeatable; values OR together. Accepts every
+            value the server may emit, including system-only statuses like
+            `blocked` that clients cannot set via update endpoints — filtering
+            is a read operation.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/ThreatStatusFilter" }
+        - name: severity
+          in: query
+          description: Filter by severity. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/SeverityInput" }
+        - name: category
+          in: query
+          description: Filter by detection-rule category (exact match, e.g. `GOVERNANCE`). Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: inventory_uri
+          in: query
+          description: Filter to threats affecting these inventory entities (exact URI match against `entities`). Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: trace_id
+          in: query
+          description: Filter to threats produced from these traces (exact match on `trace_id`). Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: first_seen_at_gte
+          in: query
+          description: Lower bound (inclusive) on `first_seen_at`.
+          schema: { type: string, format: date-time }
+        - name: first_seen_at_lte
+          in: query
+          description: Upper bound (inclusive) on `first_seen_at`.
+          schema: { type: string, format: date-time }
+        - name: q
+          in: query
+          description: |
+            Free-text search across threat metadata.
+          schema: { type: string }
+        - name: sort_by
+          in: query
+          description: Field to sort by. Defaults to `first_seen_at`.
+          schema: { $ref: "#/components/schemas/ThreatSortBy" }
+        - $ref: "#/components/parameters/SortOrderParam"
+      responses:
+        "200":
+          description: Threat list page.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreatList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /threats/detection-rules:
+    get:
+      operationId: listThreatDetectionRules
+      security:
+        - oauth2: [read:threats]
+      summary: List threat detection rules.
+      description: |
+        The rules the detection pipeline evaluates against agent activity, and how
+        each one is tuned.
+
+        Rules are maintained by Manifold: what they look for is code, not
+        configuration, so there is nothing to author here and no create or delete.
+        What you can change is how a rule is applied — `PATCH` a rule to retune its
+        severity or switch it off.
+
+        `enabled` is whether the rule runs at all.
+
+        For what the rules have actually caught, see `GET /threats` — every threat
+        names the rule that produced it in `detection_rule_id`.
+      tags: [Threats]
+      parameters:
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: detection_rule_id
+          in: query
+          description: Filter to these rules (exact match). Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: category
+          in: query
+          description: Filter by category. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: severity
+          in: query
+          description: Filter by severity. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/SeverityInput" }
+        - name: enabled
+          in: query
+          description: Filter to rules that run, or to those switched off.
+          schema: { type: boolean }
+        - name: framework
+          in: query
+          description: Filter to rules mapping to this taxonomy code (e.g. `OWASP-ASI02`).
+          schema: { type: string }
+        - name: q
+          in: query
+          description: Case-insensitive substring match on rule id, title, or description.
+          schema: { type: string }
+        - name: sort_by
+          in: query
+          schema: { $ref: "#/components/schemas/ThreatDetectionRuleSortBy" }
+        - name: sort_order
+          in: query
+          schema: { $ref: "#/components/schemas/SortOrder" }
+      responses:
+        "200":
+          description: A page of detection rules.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreatDetectionRuleList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /threats/detection-rules/{ruleId}:
+    get:
+      operationId: getThreatDetectionRule
+      security:
+        - oauth2: [read:threats]
+      summary: Get one threat detection rule.
+      description: |
+        The rule, plus the text explaining what it detects and why it matters.
+      tags: [Threats]
+      parameters:
+        - name: ruleId
+          in: path
+          required: true
+          description: The rule's identifier (e.g. `EXEC-015`).
+          schema: { type: string }
+      responses:
+        "200":
+          description: Detection rule detail.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreatDetectionRule" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    patch:
+      operationId: updateThreatDetectionRule
+      security:
+        - oauth2: [write:threats]
+      summary: Tune one threat detection rule.
+      description: |
+        Partial edit: send only the fields to change, at least one of them.
+
+        Only the tuning fields are editable — `enabled`, `severity`. What the rule
+        detects is code Manifold maintains, so the text and the detection itself
+        are not editable from here; that is the difference between a detection
+        rule and a governance policy, which you author yourself.
+
+        Retuning `severity` applies to the threats the rule has already raised as
+        well: severity is resolved when a threat is read, not stamped onto it, so
+        historical severity breakdowns re-bucket accordingly.
+
+        Switching a rule off stops it producing new threats. The threats it already
+        raised stay — they record what was found — and stay triageable.
+
+        Send `If-Match` with the `ETag` from the read this edit is based on and
+        the write applies only if nobody has retuned the rule since; a stale
+        version is refused with 412 and nothing is written. Without the header
+        the edit is unconditional and the last writer wins.
+
+        An edit that changes nothing does not move the version, so the `ETag`
+        comes back unchanged.
+      tags: [Threats]
+      parameters:
+        - name: ruleId
+          in: path
+          required: true
+          description: The rule's identifier.
+          schema: { type: string }
+        - $ref: "#/components/parameters/IfMatchParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ThreatDetectionRuleUpdate" }
+      responses:
+        "200":
+          description: The rule after the edit.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreatDetectionRule" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "412": { $ref: "#/components/responses/PreconditionFailed" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /threats/batch:
+    post:
+      operationId: batchUpdateThreatStatus
+      security:
+        - oauth2: [write:threats]
+      summary: Batch-update threat statuses.
+      description: |
+        Applies the same status to multiple threats in a single call. Threats
+        absent from the database are reported in `skipped[]` with reason
+        `not_found` rather than causing an error — the operation is idempotent
+        and returns 200 even when some IDs do not match.
+
+        `reason` is required when ignoring, as on the single-threat PATCH.
+      tags: [Threats]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ThreatBatchStatusUpdate" }
+      responses:
+        "200":
+          description: Batch update summary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreatBatchUpdateResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /threats/{threatId}:
+    get:
+      operationId: getThreat
+      security:
+        - oauth2: [read:threats]
+      summary: Get a single threat by ID.
+      tags: [Threats]
+      parameters:
+        - name: threatId
+          in: path
+          required: true
+          description: UUID of the threat.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Threat detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Threat" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    patch:
+      operationId: updateThreatStatus
+      security:
+        - oauth2: [write:threats]
+      summary: Update a threat's status.
+      description: |
+        Updates the status of a single threat. The transition graph is
+        unrestricted: any value declared in `ThreatStatusInput` is accepted
+        (the governance-derived `blocked` status is read-only).
+
+        `reason` is required when ignoring.
+      tags: [Threats]
+      parameters:
+        - name: threatId
+          in: path
+          required: true
+          description: UUID of the threat.
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ThreatStatusUpdate" }
+      responses:
+        "200":
+          description: Updated threat.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Threat" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /threats/{threatId}/audit-logs:
+    get:
+      operationId: listThreatAuditLogs
+      security:
+        - oauth2: [read:threats]
+      summary: List one threat's audit trail.
+      description: |
+        Every triage decision recorded against this threat, newest first — the same
+        entries the cross-domain feed carries for it, scoped to one threat and
+        readable with `read:threats` alone.
+
+        `entity_type` is `threat` on every entry, and `entity_id` is the threat's
+        id. What lands here is the status transitions: who resolved or reopened it,
+        and when. Retuning the rule that produced it is a different trail, on the
+        rule.
+
+        A threat nobody has triaged returns an empty page; only an unknown threat
+        is a 404.
+
+        See `GET /audit-logs` for the payload shape and for how to walk a
+        continuous extraction — the paging contract is identical.
+      tags: [Threats]
+      parameters:
+        - name: threatId
+          in: path
+          required: true
+          description: The threat's identifier.
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: action
+          in: query
+          description: Filter to these actions. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: created_at_gte
+          in: query
+          description: Only entries recorded at or after this instant.
+          schema: { type: string, format: date-time }
+        - name: created_at_lte
+          in: query
+          description: Only entries recorded at or before this instant.
+          schema: { type: string, format: date-time }
+        - name: sort_order
+          in: query
+          description: Ordering by `created_at`. Defaults to `desc`, newest first.
+          schema: { $ref: "#/components/schemas/SortOrder" }
+      responses:
+        "200":
+          description: A page of this threat's audit-log entries.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditLogEntryList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /inventory:
+    get:
+      operationId: listInventory
+      security:
+        - oauth2: [read:inventory]
+      summary: List inventory entities with cursor pagination and filtering.
+      description: |
+        Returns a page of inventory entities ordered by `sort_by` /
+        `sort_order` (default `first_seen` descending) with `uri` as
+        tiebreaker. Pagination is bidirectional (see `cursor`).
+      tags: [Inventory]
+      parameters:
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+        - name: type
+          in: query
+          description: Filter by entity type. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/InventoryType" }
+        - name: endpoint_groups
+          in: query
+          description: |
+            Filter to entities observed on an endpoint in any of these custom
+            endpoint groups. Repeatable; values OR together.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string, format: uuid }
+        - name: q
+          in: query
+          description: |
+            Free-text search across URI and the `name` metadata field.
+            Capped to keep an unbounded ILIKE scan in check.
+          schema:
+            type: string
+            maxLength: 200
+        - name: sort_by
+          in: query
+          description: Field to sort by. Defaults to `first_seen`.
+          schema: { $ref: "#/components/schemas/InventorySortBy" }
+        - $ref: "#/components/parameters/SortOrderParam"
+      responses:
+        "200":
+          description: Inventory list page.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InventoryList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /inventory/item:
+    get:
+      operationId: getInventoryItem
+      security:
+        - oauth2: [read:inventory]
+      summary: Get a single inventory entity by URI.
+      description: |
+        Returns the inventory entity matching `uri`. URIs are passed as a
+        query parameter rather than embedded in the path to avoid the
+        encoding pitfalls around `:` and `/` characters that appear in
+        Manifold URIs (e.g. `agent:claude:abc`).
+      tags: [Inventory]
+      parameters:
+        - $ref: "#/components/parameters/InventoryUriParam"
+      responses:
+        "200":
+          description: Inventory entity detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InventoryEntity" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /inventory/item/manifest:
+    get:
+      operationId: getInventoryManifest
+      security:
+        - oauth2: [read:inventory]
+      summary: Get manifest scan information for a skill, MCP server, plugin, or VSX extension.
+      description: |
+        Returns the precomputed manifest enrichment for the entity at
+        `uri`. Only `skill`, `mcp_server`, `plugin`, and `vsx` URIs carry
+        manifest data; other URI schemes return 400. When `version` is
+        omitted the latest scan result is returned.
+      tags: [Inventory]
+      parameters:
+        - $ref: "#/components/parameters/InventoryUriParam"
+        - name: version
+          in: query
+          description: |
+            Optional version pin: a content hash for `skill` and `plugin`
+            URIs, a semver for `mcp_server`, the installed version for `vsx`. When set, the server looks up
+            the scan result for that exact edition and returns 404 if none
+            exists. The 404 `code` distinguishes the two reasons: a
+            version this entity does not have is `manifest_not_found`,
+            while one that is installed but not yet scanned is
+            `manifest_version_unscanned`.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Manifest scan result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManifestScanResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /inventory/tags:
+    post:
+      operationId: updateInventoryTags
+      security:
+        - oauth2: [write:inventory]
+      summary: Update customer-authored tags on an inventory entity or one of its versions.
+      description: |
+        Adds every tag in `add` to the entity's tag set and removes every tag in
+        `remove`, atomically. Tags carry no value. The write is audited; URIs not
+        present in inventory return 404.
+        With `version`, the tags go on that one version of a skill, plugin or MCP
+        server (its `version_key`: a content hash for a skill or plugin, a release
+        for an MCP server) and the response carries the version's own tags. A hook
+        call running the version reads them merged with the entity's tags.
+        `version` on any other entity kind, or a key no version of it could have,
+        returns 400.
+        The path is nested under /inventory so the existing `mgmt-write-inventory`
+        gateway rule (PathPrefix `/management/v1/inventory`, POST) already routes it.
+      tags: [Inventory]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InventoryTagsUpdate" }
+      responses:
+        "200":
+          description: Updated tag state for the entity.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InventoryTagsState" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /inventory/managed-tags:
+    put:
+      operationId: replaceManagedTags
+      security:
+        - oauth2: [write:inventory-managed]
+      summary: Replace the managed tag set on an inventory entity.
+      description: |
+        The write lane for tags owned by an external system. `tags` is the
+        COMPLETE set for the URI, not a delta — the previous set is replaced, so
+        replays are idempotent and `[]` clears every managed tag on the entity.
+        There is no expiry: a set stays until an explicit empty PUT replaces it.
+
+        A sibling of `/inventory/tags`, not a sub-resource of it: the two lanes
+        are separate entities with separate owners. That one writes user-authored
+        tags; this one writes managed tags, and neither can touch the other's —
+        which is what makes provenance trustworthy rather than a caller-supplied
+        field. Gated by its own `write:inventory-managed` permission, so a user
+        credential cannot reach it.
+
+        Returns **202**, not the resulting set: the write is applied
+        asynchronously by asset-enricher (api-server publishes to Redis, keeping
+        inventory_enrichments single-writer), so reads are eventually consistent
+        within consumer lag. Unlike the user lane, this cannot echo the result.
+
+        A URI absent from inventory is accepted and then dropped by the writer —
+        api-server does not read inventory on this path.
+      tags: [Inventory]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManagedTagsReplace" }
+      responses:
+        "202": { description: The managed tag set was accepted for application. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  # Device fleet. These routes are reverse-proxied verbatim to auth-api's
+  # /v1/devices* by api-server (see internal/deviceproxy) — device lifecycle
+  # logic (PKI, audit, reactivation) lives in auth-api. Because responses pass
+  # through untouched, error bodies follow auth-api's shape (not the Problem
+  # schema above), so error statuses are documented by status code only.
+  /devices:
+    get:
+      operationId: listDevices
+      security:
+        - oauth2: [read:fleet]
+      summary: List the enrolled device fleet.
+      description: |
+        Returns every enrolled device identity joined with its endpoint
+        tracking (last_seen, collector_version, operational_status, metadata),
+        newest enrollment first. Devices that have not reported yet carry null
+        tracking fields — render them as unknown. Includes revoked and disabled
+        identities; the `status` field distinguishes them.
+
+        Two pagination modes: a bare `page`/`per_page` request stays on the
+        legacy offset path, while supplying `limit`, `cursor`, any filter
+        (`status`/`os`/`platform`/`group_ids`), `search`, or a sort param
+        switches to cursor mode (the response carries a `page_info` envelope and
+        `page`/`per_page` are ignored). Filtered lists therefore page via
+        `cursor`, not `page`/`per_page`.
+      tags: [Devices]
+      parameters:
+        - name: page
+          in: query
+          description: Zero-based page index (offset mode only).
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: per_page
+          in: query
+          description: Page size (offset mode only).
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: limit
+          in: query
+          description: |
+            Cursor-pagination page size. Supplying `limit`, `cursor`, any
+            filter (`status`/`os`/`platform`/`group_ids`), `search`, or a sort
+            param switches the endpoint to cursor mode (response carries
+            `page_info`); a bare `page`/`per_page` request stays on the legacy
+            offset path.
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
+          description: |
+            Opaque pagination cursor from a prior response's
+            `page_info.next_cursor` or `page_info.prev_cursor` (each is
+            self-describing — it carries its own paging direction). Omit for the
+            first page. Rejected with 400 if the filter set, search, or sort
+            changed since it was issued.
+          schema: { type: string }
+        - name: status
+          in: query
+          description: Filter by device identity status (repeatable).
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string, enum: [active, revoked, disabled] }
+        - name: os
+          in: query
+          description: Filter by OS (repeatable; raw metadata value, e.g. `darwin`).
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: platform
+          in: query
+          description: Filter by platform (repeatable; raw metadata value).
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+        - name: group_ids
+          in: query
+          description: Filter to devices in any of these custom endpoint groups (repeatable; by group id).
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string, format: uuid }
+        - name: search
+          in: query
+          description: Free-text search (space-separated words) over device id, hostname, os, platform, status, collector version, and group name.
+          schema: { type: string }
+        - name: sort_by
+          in: query
+          description: Column to sort by (cursor mode). Defaults to enrolled_at.
+          schema:
+            type: string
+            enum: [enrolled_at, last_seen, hostname, collector_version, status]
+            default: enrolled_at
+        - name: sort_order
+          in: query
+          description: Sort direction (cursor mode). Defaults to desc.
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        "200":
+          description: A page of enrolled devices.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FleetDeviceList" }
+        "401": { description: Missing or invalid bearer token. }
+        "403": { description: Authenticated but not authorized. }
+        "404": { description: Device tracking is not enabled on this deployment. }
+        "500": { description: Internal server error. }
+
+  /devices/{deviceId}:
+    patch:
+      operationId: updateDevice
+      security:
+        - oauth2: [write:fleet]
+      summary: Enable or disable an enrolled device.
+      description: |
+        Flips the collector's operational status. `enabled: false` disables it
+        (stops it operating); `true` re-enables it. Operational only — the
+        device's mTLS identity and certificate are untouched (this is not
+        revoke; the cert stays valid). Idempotent.
+      tags: [Devices]
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          description: Hardware-derived device identifier.
+          schema: { type: string, minLength: 1, maxLength: 63 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateDeviceRequest" }
+      responses:
+        "204": { description: Device updated. }
+        "400": { description: Invalid request body. }
+        "401": { description: Missing or invalid bearer token. }
+        "403": { description: Authenticated but not authorized. }
+        "404": { description: Device tracking is not enabled, or the device is unknown. }
+        "500": { description: Internal server error. }
+
+  /devices/{deviceId}/revoke:
+    post:
+      operationId: revokeDevice
+      security:
+        - oauth2: [write:fleet]
+      summary: Revoke an enrolled device's identity.
+      description: |
+        Revokes a device's mTLS identity. Sets the identity's status to
+        `revoked`; the row is retained for audit (no hard delete). Enrollment,
+        renewal, and heartbeat remain blocked until an administrator explicitly
+        reactivates the identity. The still-valid leaf keeps working only until
+        it expires (bounded by the short leaf TTL). Idempotent.
+      tags: [Devices]
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          description: Hardware-derived device identifier.
+          schema: { type: string, minLength: 1, maxLength: 63 }
+      responses:
+        "204": { description: Device revoked. }
+        "401": { description: Missing or invalid bearer token. }
+        "403": { description: Authenticated but not authorized. }
+        "404": { description: Device tracking is not enabled, or the device is unknown. }
+        "500": { description: Internal server error. }
+
+  /devices/{deviceId}/reactivate:
+    post:
+      operationId: reactivateDevice
+      security:
+        - oauth2: [write:fleet]
+      summary: Reactivate a revoked device identity.
+      description: |
+        Allows a revoked identity to perform a fresh installation-key enrollment.
+        The stored certificate is invalidated as part of the transition. An
+        already-active identity is an idempotent no-op; another non-revoked state
+        returns 409.
+      tags: [Devices]
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          description: Hardware-derived device identifier.
+          schema: { type: string, minLength: 1, maxLength: 63 }
+      responses:
+        "204": { description: Device reactivated. }
+        "400": { description: Invalid device identifier. }
+        "401": { description: Missing or invalid bearer token. }
+        "403": { description: Authenticated but not authorized. }
+        "404": { description: Device tracking is not enabled, or the device is unknown. }
+        "409": { description: Device identity state cannot be reactivated. }
+        "500": { description: Internal server error. }
+
+  /devices/filter:
+    get:
+      operationId: getDeviceFilter
+      security:
+        - oauth2: [read:fleet]
+      summary: Filter the enrolled fleet by a dimension.
+      description: |
+        Two modes on one endpoint. Without `value`: per-value device counts for
+        the dimension (`groups` populated, `devices` null) — devices reporting no
+        value fall in the null ("unknown") bucket. With `key=group` + a group
+        UUID `value`: the full endpoint details of that group's devices
+        (`devices` populated, `groups` null). Group counts overlap (many-to-many)
+        so `total` can exceed the fleet size.
+      tags: [Devices]
+      parameters:
+        - name: key
+          in: query
+          required: true
+          description: |
+            The dimension to filter the fleet by. `os` and `platform` bucket by
+            the endpoint-metadata value; `group` buckets by custom endpoint-group
+            membership (many-to-many, so buckets overlap and `total` can exceed
+            the fleet size), with the null bucket holding devices in no group.
+          schema: { type: string, enum: [os, platform, group] }
+        - name: value
+          in: query
+          required: false
+          description: |
+            Drill into a single bucket and return its endpoint details instead of
+            counts. Only valid with `key=group` (the group's UUID id); rejected
+            with 400 for `os`/`platform`.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Facet counts, or a group's endpoint details when `value` is set.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceFilterResult" }
+        "400": { description: Missing/unknown key, or value with a non-group key. }
+        "401": { description: Missing or invalid bearer token. }
+        "403": { description: Authenticated but not authorized. }
+        "404": { description: Device tracking is not enabled on this deployment. }
+        "500": { description: Internal server error. }
+
+  /devices/groups:
+    get:
+      operationId: listDeviceGroups
+      security:
+        - oauth2: [read:fleet]
+      summary: List custom endpoint groups.
+      description: |
+        Lists every custom (admin-defined) endpoint group with its current member
+        count, ordered by name. Custom groups are first-class, manually assigned
+        collections of devices — distinct from the metadata facets returned by
+        `/devices/filter`.
+      tags: [Devices]
+      responses:
+        "200":
+          description: The custom endpoint groups.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomDeviceGroupList" }
+        "401": { description: Missing or invalid bearer token. }
+        "403": { description: Authenticated but not authorized. }
+        "404": { description: Device tracking is not enabled on this deployment. }
+        "500": { description: Internal server error. }
+    post:
+      operationId: createDeviceGroup
+      security:
+        - oauth2: [write:fleet]
+      summary: Create a custom endpoint group.
+      description: |
+        Creates a new custom endpoint group by name. The name must be unique
+        across the fleet; a duplicate returns 409.
+      tags: [Devices]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateDeviceGroupRequest" }
+      responses:
+        "201":
+          description: The created group.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomDeviceGroup" }
+        "400": { description: Invalid request body. }
+        "401": { description: Missing or invalid bearer token. }
+        "403": { description: Authenticated but not authorized. }
+        "404": { description: Device tracking is not enabled on this deployment. }
+        "409": { description: A group with that name already exists. }
+        "500": { description: Internal server error. }
+
+  /devices/groups/{group_id}:
+    delete:
+      operationId: deleteDeviceGroup
+      security:
+        - oauth2: [write:fleet]
+      summary: Delete a custom endpoint group.
+      description: |
+        Deletes a custom endpoint group and all its membership rows.
+      tags: [Devices]
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          description: Stable custom endpoint group id.
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Group deleted. }
+        "401": { description: Missing or invalid bearer token. }
+        "403": { description: Authenticated but not authorized. }
+        "404": { description: Device tracking is not enabled, or the group is unknown. }
+        "500": { description: Internal server error. }
+
+  /devices/groups/{group_id}/members:
+    get:
+      operationId: listDeviceGroupMembers
+      security:
+        - oauth2: [read:fleet]
+      summary: List the devices in a custom endpoint group.
+      description: |
+        Lists every device assigned to the custom endpoint group, in the
+        same shape as the fleet view.
+      tags: [Devices]
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          description: Stable custom endpoint group id.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: The devices in the group.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceGroupMemberList" }
+        "401": { description: Missing or invalid bearer token. }
+        "403": { description: Authenticated but not authorized. }
+        "404": { description: Device tracking is not enabled, or the group is unknown. }
+        "500": { description: Internal server error. }
+
+  /devices/groups/{group_id}/members/{deviceId}:
+    put:
+      operationId: addDeviceToGroup
+      security:
+        - oauth2: [write:fleet]
+      summary: Assign a device to a custom endpoint group.
+      description: |
+        Assigns a device to the custom endpoint group. Idempotent.
+      tags: [Devices]
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          description: Stable custom endpoint group id.
+          schema: { type: string, format: uuid }
+        - name: deviceId
+          in: path
+          required: true
+          description: Hardware-derived device identifier.
+          schema: { type: string, minLength: 1, maxLength: 63 }
+      responses:
+        "204": { description: Device assigned. }
+        "401": { description: Missing or invalid bearer token. }
+        "403": { description: Authenticated but not authorized. }
+        "404": { description: Device tracking is not enabled, or the group or device is unknown. }
+        "500": { description: Internal server error. }
+    delete:
+      operationId: removeDeviceFromGroup
+      security:
+        - oauth2: [write:fleet]
+      summary: Unassign a device from a custom endpoint group.
+      description: |
+        Removes a device from the custom endpoint group. Idempotent.
+      tags: [Devices]
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          description: Stable custom endpoint group id.
+          schema: { type: string, format: uuid }
+        - name: deviceId
+          in: path
+          required: true
+          description: Hardware-derived device identifier.
+          schema: { type: string, minLength: 1, maxLength: 63 }
+      responses:
+        "204": { description: Device unassigned. }
+        "401": { description: Missing or invalid bearer token. }
+        "403": { description: Authenticated but not authorized. }
+        "404": { description: Device tracking is not enabled, or the group is unknown. }
+        "500": { description: Internal server error. }
+
+components:
+  headers:
+    ETag:
+      description: |
+        The resource's current version. Echo it back in `If-Match` on a later
+        edit to make that edit conditional. Opaque: compare it, do not parse or
+        construct it.
+      schema: { type: string }
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        OIDC client-credentials JWT. Send as `Authorization: Bearer <token>`.
+
+    oauth2:
+      type: oauth2
+      description: |
+        The same token as `bearerAuth`, declared as a flow so each operation can
+        name the scope it needs. A client may be issued with a subset of the scopes
+        below; the ones it lacks answer 403 on the operations that require them.
+
+        Authorization happens at the gateway, not in this service — the scopes
+        declared per operation document what the gateway enforces, and a test keeps
+        the two in step. Nothing here is checked by request validation.
+      flows:
+        clientCredentials:
+          tokenUrl: https://<your-auth-domain>/oauth/token
+          scopes:
+            read:metadata: Read API metadata (the OpenAPI document).
+            read:inventory: Read the inventory and its manifests.
+            write:inventory: Edit inventory tags.
+            write:inventory-managed: Replace the managed-tag definitions.
+            read:risks: Read the risk posture, a risk, its affected agents, evidence, and audit trail.
+            write:risks: Suppress or un-suppress risks and retune their severity.
+            read:threats: Read threats, their audit trail, and the detection rule catalog.
+            write:threats: Triage threats and tune detection rules.
+            read:traces: Read traces, and the payload of a single event.
+            read:policies: Read governance policies and their audit trail.
+            read:policy-violations: Read the violations governance policies produce.
+            write:policies: Author, edit and delete governance policies.
+            read:audit-logs: Read the cross-domain audit-log feed.
+            read:fleet: Read the enrolled device fleet and its groups.
+            write:fleet: Manage enrolled devices and groups.
+
+  schemas:
+    Problem:
+      type: object
+      description: RFC 7807 Problem Details with Manifold extensions.
+      required: [type, title, status]
+      properties:
+        type:        { type: string, format: uri }
+        title:       { type: string }
+        status:      { type: integer }
+        detail:      { type: string }
+        instance:    { type: string }
+        code:        { $ref: "#/components/schemas/ProblemCode" }
+        request_id:  { type: string }
+        errors:
+          type: array
+          items: { $ref: "#/components/schemas/FieldError" }
+
+    FieldError:
+      type: object
+      required: [field, code]
+      properties:
+        field:   { type: string }
+        code:    { $ref: "#/components/schemas/FieldErrorCode" }
+        message: { type: string }
+
+    FieldErrorCode:
+      type: string
+      description: |
+        Machine-readable discriminator for a single field-level validation
+        failure. Clients are expected to branch on this rather than parsing
+        the human-readable `message`.
+
+        This field is an **extensible** string: the server may introduce new
+        codes without bumping the API major version. Clients MUST handle
+        unknown codes gracefully (e.g. fall through to a generic branch).
+
+        Currently emitted values:
+
+        - `out_of_range`    — numeric/length/array bound violated (`minimum`,
+          `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems`, etc.)
+        - `invalid_enum`    — value is not one of the allowed enum members
+        - `invalid_type`    — value is of the wrong JSON type
+        - `invalid_format`  — value does not match the declared `format` or
+          `pattern`
+        - `required`        — a required property is missing
+        - `unknown_parameter` — the query parameter is not declared by this
+          operation (a retired filter, or a typo)
+        - `invalid_value`   — schema-level failure not covered by the codes
+          above
+        - `invalid_body`    — request body could not be validated at all
+          (malformed JSON, wrong content type, …)
+        - `invalid_request` — request-level failure not attributable to a
+          specific field
+
+    Event:
+      type: object
+      description: |
+        A single event ingested from an OpenTelemetry trace, an endpoint
+        collector, or an external connector. `payload`, `actor`, and
+        `environment` are opaque event-specific structures — treat them as
+        passthrough JSON. Sensitive content (prompts, completions, tool
+        outputs) may appear in `payload` for agentic events.
+      required:
+        - event_id
+        - event_name
+        - source
+        - status_code
+        - start_time
+        - end_time
+        - duration_ms
+        - trace_id
+        - inventory_uris
+      properties:
+        event_id:    { type: string, description: "Unique event identifier (16 alphanumeric characters)." }
+        event_name:
+          type: string
+          description: |
+            Semantic event type (e.g. `agent.invoke`, `tool.call`,
+            `command.exec`, `file.write`, `mcp.prompts_list`). This field
+            is an **extensible** string:
+            new event names are added as agentic workloads evolve. Clients
+            MUST handle unknown values gracefully.
+        source:      { $ref: "#/components/schemas/EventSource" }
+        status_code: { $ref: "#/components/schemas/StatusCode" }
+        start_time:  { type: string, format: date-time }
+        end_time:    { type: string, format: date-time }
+        duration_ms: { type: integer, format: int64, description: "Difference between end_time and start_time in milliseconds." }
+        trace_id:    { type: string, description: "Trace this event belongs to." }
+        span_id:     { type: string, nullable: true, description: "Span id from the correlation context; null if no span context is present." }
+        parent_span_id: { type: string, nullable: true, description: "Parent span id; null if this is a root span." }
+        actor:
+          type: object
+          description: |
+            Actor metadata (user, session, organization). Shape is
+            source-specific — treat as opaque JSON.
+          additionalProperties: true
+          nullable: true
+        payload:
+          type: object
+          description: |
+            Event-specific payload (e.g. model, tool_name, tokens, prompt,
+            completion). Shape varies per event_name. Treat as opaque
+            JSON.
+          additionalProperties: true
+          nullable: true
+        environment:
+          type: object
+          description: |
+            Deployment context (service_name, deployment_env, k8s
+            namespace, cloud provider). Treat as opaque JSON.
+          additionalProperties: true
+          nullable: true
+        inventory_uris:
+          type: array
+          items: { type: string }
+          description: URIs of inventory entities linked to this event.
+
+    EventSource:
+      type: string
+      description: |
+        Source system that produced an event, as emitted by the server in
+        responses.
+
+        This field is an **extensible** string: the server may introduce new
+        sources without bumping the API major version. Clients MUST handle
+        unknown values gracefully.
+
+        For request inputs (filters), use `EventSourceInput`, which
+        enumerates the values currently accepted by the server.
+
+        Currently emitted values:
+
+        - `otel`              — OpenTelemetry collector ingest
+        - `endpoint_collector` — Manifold endpoint collector agent
+        - `browser`            — Browser activity relayed by the endpoint collector
+        - `connector`          — External connector job (Okta, CrowdStrike, etc.)
+
+    EventSourceInput:
+      type: string
+      description: |
+        Event source value accepted by the server on request inputs.
+        Strictly enumerated so unknown values are rejected with a
+        `validation_failed` error. Adding new values here is non-breaking
+        for clients; response values use the looser `EventSource`.
+      enum:
+        - otel
+        - endpoint_collector
+        - browser
+        - connector
+
+    ProblemCode:
+      type: string
+      description: |
+        Machine-readable discriminator for the top-level Problem `code` field.
+        Clients are expected to branch on this rather than parsing the
+        human-readable `title` or `detail`.
+
+        This field is an **extensible** string: the server may introduce new
+        codes without bumping the API major version. Clients MUST handle
+        unknown codes gracefully (e.g. fall through to a generic branch).
+
+        Currently emitted values, grouped by namespace:
+
+        Request validation:
+          - `validation_failed`    — request did not match the OpenAPI spec
+            (see `errors[]` for per-field details)
+
+        Cursor pagination:
+          - `cursor_invalid`       — cursor is malformed, cannot be decoded, or
+            predates bidirectional paging; restart from the first page
+          - `cursor_inconsistent`  — cursor was issued for a different filter
+            set or sort order than the current request
+
+        Resource lookup:
+          - `risk_not_found`       — requested risk does not exist
+          - `evidence_not_found`   — the risk exists but records no evidence at
+            that (agent, asset) address
+          - `policy_not_found`     — requested governance policy does not exist
+          - `policy_managed`       — the policy is Manifold-maintained, so its
+            enforcement is not the customer's to set
+          - `violation_not_found`  — requested governance violation does not exist
+          - `threat_not_found`     — requested threat does not exist
+          - `detection_rule_not_found` — requested threat detection rule does not
+            exist
+          - `trace_not_found`      — requested trace does not exist
+          - `event_not_found`      — requested event does not exist
+
+        Manifest:
+          - `manifest_unsupported_uri`   — URI scheme carries no manifest data
+          - `manifest_not_found`         — no manifest enrichment for this entity,
+            or the pinned version is not one this entity has
+          - `manifest_version_unscanned` — the pinned version is installed but
+            has no scan result yet. Distinct from `manifest_not_found`: the pin
+            is valid and a later scan may fill it in, so retrying is meaningful
+
+        Server-side failures:
+          - `internal_error`       — unexpected server-side failure
+
+    PageInfo:
+      type: object
+      description: |
+        Bidirectional cursor-pagination envelope shared by every list response.
+
+        `has_next` / `has_prev` describe the side the page was walked toward
+        (measured from the fetch) and the side it came from (implied by the
+        cursor that produced it). The implied side is not re-verified against
+        storage: it says a page was there when the cursor was issued, not that
+        it still holds the same rows.
+      required: [data, has_next, has_prev]
+      properties:
+        data:
+          type: array
+          items: {}                     # overridden per endpoint
+        next_cursor:
+          type: string
+          nullable: true
+          description: Pages forward; null when there is no further page that way.
+        prev_cursor:
+          type: string
+          nullable: true
+          description: Pages backward; null when there is no further page that way.
+        has_next:
+          type: boolean
+        has_prev:
+          type: boolean
+
+    SortOrder:
+      type: string
+      description: Sort direction. Defaults to `desc`.
+      enum: [asc, desc]
+
+    ThreatSortBy:
+      type: string
+      description: |
+        Sortable fields on the threat list. Deliberately narrow: each value has
+        an index that can serve the keyset walk, so a deep page costs the same
+        as the first one.
+      enum: [first_seen_at, last_seen_at]
+
+    TraceSortBy:
+      type: string
+      description: |
+        Sortable fields on the trace list. Both are indexed on the rollup the
+        list reads, so a deep page costs the same as the first one.
+      enum: [first_event_time, last_event_time]
+
+    InventorySortBy:
+      type: string
+      description: |
+        Sortable fields on the inventory list. Deliberately narrow — see
+        `ThreatSortBy`.
+      enum: [first_seen, last_seen]
+
+    RiskStatus:
+      type: string
+      description: |
+        A posture entry's derived state. `active` while the row still flags at
+        least one agent, `ignored` when the risk or that asset is suppressed
+        (including a risk disabled outside this API), `resolved` when nothing is
+        flagged any more.
+      enum: [active, ignored, resolved]
+
+    RiskSortBy:
+      type: string
+      description: |
+        Sortable fields on the posture. `severity` orders by the severity
+        ladder, not alphabetically.
+      enum: [severity, impacted_agents, last_new_agent]
+
+    RiskAgentSortBy:
+      type: string
+      description: |
+        Sortable fields on a risk's affected agents. Defaults to
+        `first_affected_at`, newest first.
+      enum: [first_affected_at, last_affected_at]
+      default: first_affected_at
+
+    RiskAgent:
+      type: object
+      description: |
+        One agent a risk affects, with the assets it is affected through and its
+        status for this risk across all of them.
+      required: [agent_uri, status, first_affected_at, last_affected_at, asset_uris]
+      properties:
+        agent_uri:
+          type: string
+          description: The affected agent's URI.
+        status:
+          $ref: "#/components/schemas/RiskStatus"
+        first_affected_at:
+          type: string
+          format: date-time
+          description: |
+            When this agent first became affected by this risk, across every asset
+            — resolved ones included, so this can predate anything still live. The
+            posture entry's `last_new_agent_at` is the latest of these.
+        last_affected_at:
+          type: string
+          format: date-time
+          description: |
+            When the detection pipeline last confirmed this agent affected. It keeps
+            moving while the agent stays affected, and stops when the risk stops
+            applying — so on a `resolved` agent it is when that happened.
+        asset_uris:
+          type: array
+          description: |
+            Every asset this risk has affected the agent through, resolved ones
+            included. `status` is where the agent stands **now**; this field and the
+            two timestamps mean **ever** — so an asset the agent is no longer
+            affected through stays listed, and the evidence recorded under it stays
+            addressable.
+
+            Values are spelled as every risk surface spells them, so one can be sent
+            straight back: as an `asset_uri` filter here, or as the `asset_uri` of
+            `GET /risks/{riskId}/evidence`. Contains the empty string when the agent
+            is affected outside any asset, the same spelling the posture uses for
+            that case, and holds exactly that one member for a risk that does not
+            partition its agents by an asset.
+
+            One value does **not** round-trip: `GET /risk-posture` counts only what
+            is still affected, so an asset that appears here solely through a
+            resolved impact selects no posture row. Filtering this list by it still
+            finds the agent — the filter is independent of `status`, so
+            `?asset_uri=X&status=active` selects agents affected through X at some
+            point that are outstanding somewhere now, not agents outstanding
+            through X.
+          items: { type: string }
+
+    RiskAgentList:
+      type: object
+      required: [data, has_next, has_prev]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/RiskAgent" }
+        next_cursor:
+          type: string
+        prev_cursor:
+          type: string
+        has_next:
+          type: boolean
+        has_prev:
+          type: boolean
+
+    RiskEvidence:
+      type: object
+      description: |
+        The evidence for one (risk, agent, asset) triple. The triple is echoed back
+        so a stored response identifies what it describes.
+      required: [risk_id, agent_uri, asset_uri, evidence]
+      properties:
+        risk_id:
+          type: string
+        agent_uri:
+          type: string
+        asset_uri:
+          type: string
+          description: |
+            The asset this evidence was recorded under; the empty string when it was
+            recorded outside any asset.
+        evidence:
+          type: object
+          additionalProperties: true
+          description: |
+            What the detection pipeline observed. Shaped by the risk that produced
+            it, so treat it as diagnostic detail rather than a stable contract.
+
+    AuditLogEntry:
+      type: object
+      description: |
+        One recorded change: what was touched, by whom, and when.
+      required: [id, created_at, entity_type, entity_id, action, actor]
+      properties:
+        id:
+          type: string
+          description: The entry's identifier, and the tiebreaker the paging order uses.
+        created_at:
+          type: string
+          format: date-time
+          description: When the change was recorded.
+        entity_type:
+          type: string
+          description: |
+            What kind of thing was changed, e.g. `risk_profile`, `threat`,
+            `inventory`. The set grows as domains are added, so treat it as open.
+        entity_id:
+          type: string
+          description: The changed entity's identifier, unique within its type.
+        action:
+          type: string
+          description: |
+            What was done, e.g. `ignored`, `profile_updated`. Open set, like
+            `entity_type`.
+        actor:
+          type: string
+          description: |
+            Who made the change, as `<kind>:<id>` — e.g. `user:admin@example.com`.
+            Empty when the writer recorded no actor.
+        changes:
+          type: object
+          additionalProperties: true
+          description: |
+            What the change consisted of, as the writer recorded it — typically the
+            before and after of each edited field. Shaped by the action that
+            produced it, so it is diagnostic detail rather than a stable contract.
+            Omitted when the writer recorded none.
+
+    AuditLogEntryList:
+      type: object
+      required: [data, has_next, has_prev]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/AuditLogEntry" }
+        next_cursor:
+          type: string
+          description: |
+            The position after this page's last entry. Present whenever the page has
+            entries, including once you have caught up — see the endpoint
+            description. Absent only on an empty page.
+        prev_cursor:
+          type: string
+        has_next:
+          type: boolean
+        has_prev:
+          type: boolean
+
+    GovernanceAction:
+      type: string
+      description: |
+        What a policy does when it matches. `alert` records the match; `advise`
+        lets the call run and puts the policy's `response_message` in the model's
+        context; `correct` stops the call and hands the model `response_message`
+        as the reason, so it retries with the safe form; `ask` puts the call to
+        the developer and denies only if nobody can be reached; `block` denies the
+        tool call or prompt in flight; `block_session` denies it and blocks every
+        later call in the session, permanently. `correct` and `advise` require a
+        non-blank `response_message`.
+      enum: [alert, advise, correct, ask, block, block_session]
+
+    GovernancePolicyCategory:
+      type: string
+      description: |
+        What a governance policy governs. A closed set specific to this lane —
+        governance policies are authored rules, so they do not share the detector
+        categories that risks and threat detection rules are filed under.
+      enum: [ACCESS, EXECUTION, DATA, USAGE]
+
+    GovernancePolicySortBy:
+      type: string
+      description: |
+        Sortable fields on the policy catalog. `updated_at` is the one to walk to
+        pick up configuration changes.
+      enum: [updated_at, title]
+      default: updated_at
+
+    GovernancePolicySummary:
+      type: object
+      description: One governance policy, without the rule behind it.
+      required:
+        [policy_id, title, description, category, severity, action,
+         enabled, is_managed, priority, action_options, owner, taxonomy_mappings,
+         created_at, updated_at]
+      properties:
+        policy_id:
+          type: string
+          format: uuid
+          description: The policy's identifier, an opaque uuid.
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          $ref: "#/components/schemas/GovernancePolicyCategory"
+        severity:
+          type: string
+          description: Severity carried by the violations this policy produces.
+        action:
+          $ref: "#/components/schemas/GovernanceAction"
+        priority:
+          type: integer
+          format: int32
+          description: |
+            Attribution order when several block policies match one event: the
+            highest priority supplies the block message and policy id. Does not
+            change whether an event is blocked. Defaults to 0.
+        action_options:
+          $ref: "#/components/schemas/GovernancePolicyActionOptions"
+        enabled:
+          type: boolean
+          description: Whether the policy is evaluated at all. A disabled one matches nothing.
+        is_managed:
+          type: boolean
+          description: |
+            True for a Manifold-maintained policy, false for one this organization
+            authored. Only the latter can be edited or deleted.
+        owner:
+          type: string
+          description: Who maintains the policy, as recorded on it.
+        taxonomy_mappings:
+          type: array
+          description: Framework codes the policy maps to, e.g. `OWASP-ASI02`.
+          items: { type: string }
+        response_message:
+          type: string
+          description: |
+            What the agent is told when this policy blocks, or the directive a
+            `correct` or `advise` policy hands the model. Absent when the policy
+            does not set one.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+          description: When the policy was last changed. The default sort walks this.
+
+    GovernancePolicy:
+      allOf:
+        - $ref: "#/components/schemas/GovernancePolicySummary"
+        - type: object
+          description: One governance policy, with the rule behind it.
+          properties:
+            cedar_policy:
+              type: string
+              description: |
+                The Cedar expression the policy is evaluated from. Absent when the
+                policy keeps its expression internal.
+
+    ThreatDetectionRuleSortBy:
+      type: string
+      description: |
+        Sortable fields on the rule catalog. `updated_at` is the one to walk to
+        pick up tuning changes.
+      enum: [updated_at, title]
+      default: updated_at
+
+    ThreatDetectionRuleSummary:
+      type: object
+      description: One detection rule, without its explanatory text.
+      required:
+        [detection_rule_id, title, description, category, severity,
+         enabled, owner, taxonomy_mappings, created_at, updated_at]
+      properties:
+        detection_rule_id:
+          type: string
+          description: The rule's identifier (e.g. `EXEC-015`). This is what a threat names.
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        severity:
+          type: string
+          description: Severity the threats this rule raises inherit.
+        enabled:
+          type: boolean
+          description: Whether the rule runs. A disabled rule raises nothing new.
+        owner:
+          type: string
+          description: Who maintains the rule, as recorded on it.
+        taxonomy_mappings:
+          type: array
+          description: Framework codes the rule maps to.
+          items: { type: string }
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+          description: When the rule was last tuned. The default sort walks this.
+
+    ThreatDetectionRule:
+      allOf:
+        - $ref: "#/components/schemas/ThreatDetectionRuleSummary"
+        - type: object
+          description: One detection rule, with the text explaining what it looks for.
+          required: [what_it_detects, why_it_matters, potential_impact]
+          properties:
+            what_it_detects:
+              type: string
+            why_it_matters:
+              type: string
+            potential_impact:
+              type: string
+
+    ThreatDetectionRuleList:
+      type: object
+      required: [data, has_next, has_prev]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ThreatDetectionRuleSummary" }
+        next_cursor:
+          type: string
+        prev_cursor:
+          type: string
+        has_next:
+          type: boolean
+        has_prev:
+          type: boolean
+
+    ThreatDetectionRuleUpdate:
+      type: object
+      additionalProperties: false
+      description: |
+        Partial tuning of one rule. Every field is optional; at least one must be
+        present. What the rule detects is not editable.
+      minProperties: 1
+      properties:
+        enabled:
+          type: boolean
+        severity:
+          $ref: "#/components/schemas/SeverityInput"
+
+    GovernanceViolation:
+      type: object
+      description: |
+        One firing of one policy: what matched, on what, and what happened at that
+        moment.
+      required:
+        [violation_id, policy_id, policy_title, severity, category, enforcement,
+         actor, asset_uri, trace_id, event_id, created_at]
+      properties:
+        violation_id:
+          type: string
+          description: |
+            The firing's identifier. Reported as a plain string; the path parameter
+            that fetches it validates the UUID form.
+        policy_id:
+          type: string
+          description: |
+            The policy that matched. It may no longer be in the catalog: a deleted
+            policy keeps what it caught.
+        policy_title:
+          type: string
+          description: |
+            The policy's title as it stands now. A deleted policy keeps its text,
+            so a historical firing still says what caught it; the field is empty
+            only for a firing whose policy the catalog never held.
+        severity:
+          type: string
+          description: The policy's severity as it stands now.
+        category:
+          type: string
+        enforcement:
+          $ref: "#/components/schemas/GovernanceAction"
+        actor:
+          type: string
+          description: Who or what was acting, as recorded on the firing; empty when unknown.
+        asset_uri:
+          type: string
+          description: |
+            The asset the policy fired on. Empty when the firing named none. The
+            URI scheme is the asset's type, so no separate field carries it.
+        trace_id:
+          type: string
+          description: The agentic run the firing belongs to.
+        event_id:
+          type: string
+          description: The event that triggered it. `GET /events/{eventId}` has the payload.
+        created_at:
+          type: string
+          format: date-time
+          description: When the policy fired.
+        asset_version:
+          type: string
+          description: |
+            The version of the asset a supply-chain policy judged: a content hash
+            for skills and plugins, the release for MCP servers. Absent for any
+            other policy.
+        manifest:
+          $ref: "#/components/schemas/GovernanceViolationManifest"
+        fallback_reason:
+          $ref: "#/components/schemas/GovernanceViolationFallbackReason"
+
+    GovernanceViolationFallbackReason:
+      type: string
+      description: |
+        Why a firing recorded something other than the policy's action; absent
+        when it ran as configured, and on firings recorded before this was
+        tracked. `no_prompt`: an `ask` on an event with no permission prompt
+        (recorded as `block`). `no_retry_channel`: a `correct` whose reason
+        cannot reach whoever retries (`block`). `no_model_channel`: an `advise`
+        on an event with no channel into the model's context (`alert`).
+        `no_session`: a `block_session` on a surface with no session identity
+        (`block`). `no_message`: a `correct` or `advise` whose message rendered
+        empty. `already_ran`: the call had already run when the policy matched,
+        e.g. a browser tool call (`alert`). `alert_only`: matched on telemetry,
+        where nothing waits on a verdict (`alert`).
+      enum: [no_prompt, no_retry_channel, no_model_channel, no_session, no_message, already_ran, alert_only]
+
+    GovernanceViolationManifest:
+      type: object
+      description: |
+        What a supply-chain policy read about the version when it fired: Manifest's
+        facts. Absent for any other policy.
+      required: [version, status, exact, dated, age_days, scan_pending, scan_failed]
+      properties:
+        version:
+          type: string
+        seen:
+          type: boolean
+          description: False for a version nothing recorded when the call ran.
+        status:
+          type: string
+        severity:
+          type: string
+        exact:
+          type: boolean
+        dated:
+          type: boolean
+        age_days:
+          type: integer
+        published_at:
+          type: string
+          format: date-time
+          description: When the version was published; absent while undated.
+        scan_pending:
+          type: boolean
+        scan_failed:
+          type: boolean
+        origin:
+          type: string
+        origin_reason:
+          type: string
+          description: How Manifest established the origin, e.g. provenance_verified or catalog_match.
+        upstream_repo:
+          type: string
+          description: The git repo Manifest matched these bytes to, as github.com/<owner>/<repo>.
+
+    GovernanceViolationList:
+      type: object
+      required: [data, has_next, has_prev]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/GovernanceViolation" }
+        next_cursor:
+          type: string
+        prev_cursor:
+          type: string
+        has_next:
+          type: boolean
+        has_prev:
+          type: boolean
+
+    GovernancePolicyActionOptions:
+      type: object
+      additionalProperties: false
+      required: [notify_user]
+      description: |
+        Knobs that refine how the policy's action behaves, every option present
+        with its value or default. Each option names the action it applies to and
+        is inert under any other; options are kept when the action changes.
+      properties:
+        notify_user:
+          type: boolean
+          description: |
+            Alert only: show the user a notice when this policy fires; the
+            violation is recorded either way.
+
+    GovernancePolicyActionOptionsInput:
+      type: object
+      additionalProperties: false
+      description: |
+        Action options to set. Every option is optional; an unknown one is a 400.
+      properties:
+        notify_user:
+          type: boolean
+          description: |
+            Alert only: show the user a notice when this policy fires; the
+            violation is recorded either way. Defaults to false.
+
+    GovernancePolicyCreate:
+      type: object
+      additionalProperties: false
+      description: |
+        A new customer-authored policy. The id and `is_managed` are set by the
+        server.
+      required: [title, description, category, action, cedar_policy]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+        category:
+          $ref: "#/components/schemas/GovernancePolicyCategory"
+        action:
+          $ref: "#/components/schemas/GovernanceAction"
+        cedar_policy:
+          type: string
+          minLength: 1
+          description: The rule the policy is evaluated from.
+        severity:
+          $ref: "#/components/schemas/SeverityInput"
+        enabled:
+          type: boolean
+          description: Defaults to true. Create with false to stage a policy before it takes effect.
+        priority:
+          type: integer
+          format: int32
+          description: |
+            Attribution order when several block policies match one event: higher
+            wins. Defaults to 0; negative values rank the policy below the default.
+            Does not change whether an event is blocked.
+        action_options:
+          $ref: "#/components/schemas/GovernancePolicyActionOptionsInput"
+        taxonomy_mappings:
+          type: array
+          items: { type: string }
+        response_message:
+          type: string
+          description: |
+            What a blocked agent is told. A template; omitted leaves the default
+            message. Required, and must not be blank, when `action` is `correct`
+            or `advise`.
+
+    GovernancePolicyUpdate:
+      type: object
+      additionalProperties: false
+      description: |
+        Partial edit of one policy. Every field is optional; at least one must be
+        present. A field left out is left as it stands. `action_options` is merged
+        per key: only the options sent change, and sending an option's default
+        clears it. `taxonomy_mappings`, by contrast, is replaced wholesale.
+      minProperties: 1
+      properties:
+        enabled:
+          type: boolean
+          description: Whether the policy is evaluated at all.
+        action:
+          $ref: "#/components/schemas/GovernanceAction"
+        priority:
+          type: integer
+          format: int32
+          description: |
+            Attribution order when several block policies match one event: higher
+            wins. Omit to leave unchanged; send 0 to reset to the default. Carries
+            no schema default on purpose — one would make an omitted field
+            indistinguishable from an explicit 0 and silently reset the value.
+        action_options:
+          $ref: "#/components/schemas/GovernancePolicyActionOptionsInput"
+        severity:
+          $ref: "#/components/schemas/SeverityInput"
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+        category:
+          $ref: "#/components/schemas/GovernancePolicyCategory"
+        taxonomy_mappings:
+          type: array
+          description: Replaces the whole set of framework codes.
+          items: { type: string }
+        response_message:
+          type: string
+          description: |
+            What a blocked agent is told. A template; the empty string clears it
+            and restores the default message, which a `correct` or `advise`
+            policy refuses.
+        cedar_policy:
+          type: string
+          minLength: 1
+          description: |
+            Replaces the rule the policy is evaluated from. The assets it names
+            are re-derived from it.
+
+    GovernancePolicyBatchUpdate:
+      type: object
+      additionalProperties: false
+      description: |
+        Request body for a batch enforcement change, or for a batch delete. At
+        least one of `enabled`, `action`, `priority` and `delete` is required;
+        ids that cannot be applied come back in `skipped[]`.
+      required: [policy_ids]
+      properties:
+        policy_ids:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items: { type: string, format: uuid }
+        enabled:
+          type: boolean
+        action:
+          $ref: "#/components/schemas/GovernanceAction"
+        priority:
+          type: integer
+          format: int32
+          description: |
+            Attribution order applied to every named policy. Omit to leave
+            unchanged; carries no schema default, for the same reason as
+            `GovernancePolicyUpdate`.
+        delete:
+          type: boolean
+          description: |
+            When true, retires every named policy instead of changing how it
+            enforces; combining it with `enabled`, `action` or `priority` is a
+            400. `false` asks for nothing, so a body carrying it alone is a 400
+            too.
+      anyOf:
+        - required: [enabled]
+        - required: [action]
+        - required: [priority]
+        - required: [delete]
+
+    GovernancePolicySkipReason:
+      type: string
+      description: |
+        Why a requested policy was not changed. `not_found` — no live policy
+        carries that id; `managed` — the policy is Manifold-maintained, so its
+        enforcement is not the customer's to set.
+      enum: [not_found, managed]
+
+    GovernancePolicyBatchSkip:
+      type: object
+      required: [policy_id, reason]
+      properties:
+        policy_id:
+          type: string
+          format: uuid
+        reason:
+          $ref: "#/components/schemas/GovernancePolicySkipReason"
+
+    GovernancePolicyBatchUpdateResponse:
+      type: object
+      required: [skipped]
+      properties:
+        skipped:
+          type: array
+          description: |
+            The requested ids that were not changed, each with its reason. Empty
+            when every id applied.
+          items: { $ref: "#/components/schemas/GovernancePolicyBatchSkip" }
+
+    GovernancePolicyList:
+      type: object
+      required: [data, has_next, has_prev]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/GovernancePolicySummary" }
+        next_cursor:
+          type: string
+        prev_cursor:
+          type: string
+        has_next:
+          type: boolean
+        has_prev:
+          type: boolean
+
+    RiskBatchUpdate:
+      type: object
+      additionalProperties: false
+      description: |
+        Request body for a batch suppression. Applies the same status to many risks,
+        always at the whole-risk scope. Skipped ids are reported in the response
+        rather than failing the call.
+      required: [risk_ids, status]
+      properties:
+        risk_ids:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items: { type: string }
+        status:
+          $ref: "#/components/schemas/RiskStatusInput"
+        reason:
+          type: string
+          description: Why the risks are being suppressed. Required when `status` is `ignored`.
+          maxLength: 30
+
+    RiskBatchSkip:
+      type: object
+      description: One id a batch update did not apply to, and why.
+      required: [id, reason]
+      properties:
+        id:
+          type: string
+        reason:
+          $ref: "#/components/schemas/RiskSkipReason"
+
+    RiskSkipReason:
+      type: string
+      description: |
+        Reason a risk was skipped during a batch update.
+
+        This field is an **extensible** string: the server may introduce new skip
+        reasons without bumping the API major version. Clients MUST handle unknown
+        values gracefully (e.g. log and fall through).
+
+        Currently emitted values:
+
+        - `not_found`          — no risk with this id exists
+
+    RiskBatchUpdateResponse:
+      type: object
+      description: |
+        Summary of a batch suppression. Reports the ids that were skipped, with the
+        reason why. The absence of an input id from `skipped` means the risk was
+        updated.
+
+        Duplicate input ids are collapsed: each unique id appears at most once in
+        `skipped`, regardless of how many times it was sent.
+      required: [skipped]
+      properties:
+        skipped:
+          type: array
+          description: |
+            Ids that were not updated, with the reason why. Deduplicated: each
+            unique input id appears at most once.
+          items: { $ref: "#/components/schemas/RiskBatchSkip" }
+
+    RiskStatusInput:
+      type: string
+      description: |
+        The states a client may set. `resolved` is absent deliberately: it is
+        derived from whether anything is still affected, not chosen.
+      enum: [active, ignored]
+
+    RiskUpdate:
+      type: object
+      # Every write body on this surface is strict. A field the schema does not
+      # declare is refused rather than ignored: a typo like "enable" would
+      # otherwise answer 200 and change nothing, which reads as success. Same
+      # reason on each of the others.
+      additionalProperties: false
+      description: At least one of `status` and `severity` must be present.
+      minProperties: 1
+      properties:
+        status:
+          $ref: "#/components/schemas/RiskStatusInput"
+        reason:
+          type: string
+          description: Why the risk is being suppressed. Required when `status` is `ignored`.
+          maxLength: 30
+        agent_uris:
+          type: array
+          description: Narrow the suppression to these agents. Omit to cover every affected agent.
+          items: { type: string }
+        asset_uri:
+          type: string
+          description: |
+            Narrow the suppression to this asset. Omit to cover every asset.
+
+            The empty string is not the no-asset entry here — see the endpoint
+            description.
+        severity:
+          $ref: "#/components/schemas/SeverityInput"
+          description: Retune the risk's severity. Cannot be combined with a narrower scope.
+
+    RiskPostureEntry:
+      type: object
+      description: >-
+        One posture entry — a risk and the asset its affected agents are affected
+        through.
+      required:
+        - risk_id
+        - title
+        - description
+        - category
+        - severity
+        - status
+        - impacted_agents_count
+        - asset_uri
+        - asset_type
+      properties:
+        risk_id:
+          type: string
+          description: The risk's identifier (e.g. `HYG-016`).
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        severity:
+          $ref: "#/components/schemas/Severity"
+        status:
+          $ref: "#/components/schemas/RiskStatus"
+        risk_factor:
+          type: string
+          description: The factor this risk contributes to. Absent when the risk declares none.
+        impacted_agents_count:
+          type: integer
+          description: |
+            Agents affected through this entry's asset. Unaffected by an ignore on
+            the entry itself: suppressing an asset hides it from your working set
+            without changing how many agents it holds.
+        last_new_agent_at:
+          type: string
+          format: date-time
+          description: |
+            When an agent most recently entered this entry's affected set. Absent
+            when none ever has — an entry with nothing affected has no such moment,
+            and it sorts at the bottom of `last_new_agent` rather than reporting an
+            invented timestamp.
+        asset_uri:
+          type: string
+          description: |
+            The asset this entry is scoped to (e.g. `mcp_server://acme/github`).
+
+            This is the partition key, not an optional field: the entry collecting
+            agents affected through no asset reports the empty string. That is the
+            value `asset_uri` filters on, so it round-trips unchanged.
+        asset_type:
+          type: string
+          description: |
+            Entity type of `asset_uri`, matching the risk's partitioning
+            dimension. Empty alongside an empty `asset_uri`.
+        taxonomy_mappings:
+          type: array
+          description: Framework codes the risk maps to.
+          items: { type: string }
+
+    Risk:
+      type: object
+      description: >-
+        A risk: its catalog text and the counts for the whole of it, across every
+        asset.
+      required:
+        - risk_id
+        - title
+        - description
+        - what_it_detects
+        - why_it_matters
+        - potential_impact
+        - category
+        - severity
+        - status
+        - impacted_agents_count
+      properties:
+        risk_id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        what_it_detects:
+          type: string
+        why_it_matters:
+          type: string
+        potential_impact:
+          type: string
+        category:
+          type: string
+        severity:
+          $ref: "#/components/schemas/Severity"
+        status:
+          $ref: "#/components/schemas/RiskStatus"
+        risk_factor:
+          type: string
+          description: The factor this risk contributes to. Absent when the risk declares none.
+        impacted_agents_count:
+          type: integer
+          description: >-
+            The agents this risk affects, counted once each however many assets
+            they are affected through.
+        last_new_agent_at:
+          type: string
+          format: date-time
+          description: When an agent most recently entered this risk's affected set. Absent when none ever has.
+        taxonomy_mappings:
+          type: array
+          description: Framework codes the risk maps to.
+          items: { type: string }
+
+    RiskPostureEntryList:
+      description: A page of posture entries with cursor pagination.
+      allOf:
+        - $ref: "#/components/schemas/PageInfo"
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: "#/components/schemas/RiskPostureEntry" }
+
+    ThreatStatus:
+      type: string
+      description: |
+        Workflow status of a threat finding, as emitted by the server in
+        responses.
+
+        This field is an **extensible** string: the server may introduce new
+        statuses without bumping the API major version. Clients MUST handle
+        unknown values gracefully (e.g. fall through to a generic branch).
+
+        For request inputs (filters, update bodies), use `ThreatStatusInput`,
+        which enumerates the values currently accepted by the server.
+
+        Currently emitted values:
+
+        - `open`          — newly detected, not yet triaged
+        - `investigating` — triage in progress
+        - `resolved`      — addressed; no further action expected
+        - `ignored`       — dismissed as not actionable
+        - `blocked`       — governance-derived; read-only, not settable
+
+    ThreatStatusInput:
+      type: string
+      description: |
+        Threat status value accepted by the server on update request bodies
+        (`PATCH /threats/{id}`, `POST /threats/batch`). `blocked` is
+        governance-derived and cannot be set.
+      enum:
+        - open
+        - investigating
+        - resolved
+        - ignored
+
+    ThreatStatusFilter:
+      type: string
+      description: |
+        Threat status value accepted by the server on the list-filter query
+        parameter.
+      enum:
+        - open
+        - investigating
+        - resolved
+        - ignored
+        - blocked
+
+    Severity:
+      type: string
+      description: |
+        Severity level of a finding, as emitted by the server in responses.
+        Inherited from the originating security profile. A finding whose profile
+        is no longer present is omitted from responses rather than reported at a
+        placeholder severity.
+
+        This field is an **extensible** string: the server may introduce new
+        severity levels without bumping the API major version. Clients MUST
+        handle unknown values gracefully (e.g. fall through to a generic
+        branch).
+
+        For request inputs (filters), use `SeverityInput`, which enumerates
+        the values currently accepted by the server.
+
+        Currently emitted values:
+
+        - `critical`  — highest severity, immediate attention required
+        - `high`
+        - `medium`
+        - `low`
+
+    SeverityInput:
+      type: string
+      description: |
+        Severity value accepted by the server on the severity filter.
+      enum:
+        - critical
+        - high
+        - medium
+        - low
+
+    StatusCode:
+      type: string
+      description: |
+        Outcome status for an event, as emitted by the server. Extensible
+        string — clients MUST handle unknown values gracefully.
+
+        Currently emitted values:
+
+        - `success`
+        - `failure`
+        - `unknown`
+
+    Threat:
+      type: object
+      description: |
+        A threat finding: something the detection pipeline spotted in an agent's
+        activity. Severity is inherited from the detection rule that produced it,
+        named by `detection_rule_id`.
+
+        Governance violations are not threats and are not listed here — a policy
+        firing is a separate resource at `GET /governance/violations`, with its own
+        lifecycle and no triage status.
+      required:
+        - id
+        - detection_rule_id
+        - status
+        - severity
+        - title
+        - description
+        - first_seen_at
+        - last_seen_at
+        - seen_count
+        - entities
+        - actor
+        - trace_id
+      properties:
+        id:            { type: string, format: uuid }
+        detection_rule_id:
+          type: string
+          description: The detection rule that produced this threat.
+        status:        { $ref: "#/components/schemas/ThreatStatus" }
+        severity:      { $ref: "#/components/schemas/Severity" }
+        title:         { type: string }
+        description:   { type: string }
+        first_seen_at: { type: string, format: date-time }
+        last_seen_at:  { type: string, format: date-time }
+        seen_count:    { type: integer }
+        entities:
+          type: array
+          items: { type: string }
+          description: URIs of entities involved in this threat (hosts, users, agents, etc.).
+        actor:    { type: string, nullable: true }
+        trace_id: { type: string, nullable: true }
+
+    ThreatList:
+      description: A page of threats with cursor pagination.
+      allOf:
+        - $ref: "#/components/schemas/PageInfo"
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: "#/components/schemas/Threat" }
+
+    ThreatStatusUpdate:
+      type: object
+      additionalProperties: false
+      description: Request body to update a single threat's status.
+      required: [status]
+      properties:
+        status:  { $ref: "#/components/schemas/ThreatStatusInput" }
+        reason:  { $ref: "#/components/schemas/ThreatIgnoreReason" }
+
+    ThreatBatchStatusUpdate:
+      type: object
+      additionalProperties: false
+      description: |
+        Request body for batch status update. Applies the same status to many
+        threats in one call. Skipped IDs are reported in the response with a
+        reason (see `ThreatSkipReason`); the operation never errors on missing
+        IDs.
+      required: [ids, status]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/ThreatStatusInput" }
+        reason: { $ref: "#/components/schemas/ThreatIgnoreReason" }
+
+    ThreatIgnoreReason:
+      type: string
+      description: |
+        Why a threat is ignored. Required when `status` is `ignored`, read only
+        then. `false_positive` means the detection is wrong; `accepted_risk`
+        means it is right and the exposure is accepted.
+      enum: [accepted_risk, false_positive]
+
+    ThreatSkipReason:
+      type: string
+      description: |
+        Reason a threat was skipped during a batch update.
+
+        This field is an **extensible** string: the server may introduce new
+        skip reasons without bumping the API major version. Clients MUST
+        handle unknown values gracefully (e.g. log and fall through).
+
+        Currently emitted values:
+
+        - `not_found`          — no threat with this id exists
+
+    ThreatBatchUpdateResponse:
+      type: object
+      description: |
+        Summary of a batch status update. Reports the IDs that were skipped,
+        with the reason why. The absence of an input ID from `skipped` means
+        the threat was updated.
+
+        Duplicate input IDs are collapsed: each unique ID appears at most once
+        in `skipped`, regardless of how many times it was sent in the request.
+      required: [skipped]
+      properties:
+        skipped:
+          type: array
+          description: |
+            IDs that were not updated, with the reason why. Deduplicated:
+            each unique input ID appears at most once.
+          items:
+            type: object
+            required: [id, reason]
+            properties:
+              id:     { type: string, format: uuid }
+              reason: { $ref: "#/components/schemas/ThreatSkipReason" }
+
+    Trace:
+      type: object
+      description: |
+        A full trace: the same summary fields as `TraceSummary` plus the
+        complete event timeline ordered by `start_time` ascending.
+      required:
+        - trace_id
+        - event_count
+        - first_event_time
+        - last_event_time
+        - source
+        - actor
+        - events
+      properties:
+        trace_id:         { type: string }
+        event_count:      { type: integer }
+        first_event_time: { type: string, format: date-time }
+        last_event_time:  { type: string, format: date-time, description: "Same definition as on TraceSummary; falls back to the last event of any kind when the trace has no activity event." }
+        source:           { $ref: "#/components/schemas/EventSource" }
+        actor:            { type: string, nullable: true, description: "Same derivation as on TraceSummary." }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/Event" }
+          description: Event timeline ordered by `start_time` ascending.
+
+    TraceSummary:
+      type: object
+      description: |
+        Compact view of a trace: identifiers, time bounds, event count, the
+        actor that initiated it, and the source that ingested it. Use
+        `GET /traces/{traceId}` to fetch the full event timeline.
+      required:
+        - trace_id
+        - event_count
+        - first_event_time
+        - last_event_time
+        - source
+        - actor
+      properties:
+        trace_id:        { type: string }
+        event_count:     { type: integer }
+        first_event_time: { type: string, format: date-time }
+        last_event_time:  { type: string, format: date-time, description: "Time of the trace's last activity event (prompt, LLM, tool or approval). Session start/end, instruction loads and MCP handshakes don't move it." }
+        source:          { $ref: "#/components/schemas/EventSource" }
+        actor:           { type: string, nullable: true, description: "Actor that initiated the trace in canonical kind:id form. Null if no actor entity is associated." }
+
+    TraceList:
+      description: A page of trace summaries with cursor pagination.
+      allOf:
+        - $ref: "#/components/schemas/PageInfo"
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: "#/components/schemas/TraceSummary" }
+
+    InventoryType:
+      type: string
+      description: Type of inventory entity.
+      enum: [agent, endpoint, user, model, tool, mcp_server, resource, skill, plugin, vsx, memory, sandbox]
+      x-go-type: entity.Type
+      x-go-type-import:
+        path: github.com/manifold-security/core/apps/shared/entity
+        name: entity
+
+    DiscoverySource:
+      type: string
+      description: |
+        Source system that discovered the inventory entity. Extensible
+        string: clients MUST handle unknown values gracefully. Currently
+        emitted: `endpoint_collector`, `edr`, `otel`, `connector`.
+
+    MonitoringStatus:
+      type: string
+      description: |
+        The asset's coverage. `monitored` means agentic activity was recorded at
+        some point, whatever its recency. `no_activity` means the collector's hook
+        is attached but nothing has run through it. `unmonitored` means no
+        instrumentation is attached.
+      enum: [monitored, no_activity, unmonitored]
+      x-go-type: labels.MonitoringStatus
+      x-go-type-import:
+        path: github.com/manifold-security/core/apps/shared/labels
+
+    PrimaryEndpoint:
+      type: object
+      description: |
+        The endpoint the asset most recently ran on, drawn from the same
+        reachable endpoint set `endpoint_count` counts. Recency, not frequency:
+        an asset that ran once on a new host reports that host.
+      required: [hostname]
+      properties:
+        hostname:
+          type: string
+        uri:
+          type: string
+          description: The endpoint's inventory URI, for looking the endpoint up as an asset.
+        device_id:
+          type: string
+          description: The enrolled device id. Absent for sources that do not enroll.
+
+    RiskTier:
+      type: string
+      enum: [critical, high, medium, low]
+      description: >-
+        Risk tier derived from the asset's open risk-profile findings (highest
+        severity wins). low covers assets with no open findings.
+
+    InventorySummary:
+      type: object
+      description: |
+        List-view projection of an inventory entity.
+
+        `monitoring_status`, `endpoint_count`, `policies_count`, `risks_count`
+        and `primary_endpoint` are served from precomputed per-asset enrichments
+        rather than derived on read, so they can trail the live tables by up to
+        one enrichment interval.
+      required:
+        - uri
+        - type
+        - name
+        - short_name
+        - monitoring_status
+        - risk_tier
+        - risk_tier_label
+        - endpoint_count
+        - risks_count
+        - first_seen
+        - last_seen
+      properties:
+        uri:
+          type: string
+        type:
+          $ref: "#/components/schemas/InventoryType"
+        name:
+          type: string
+          description: Display name from metadata when present, otherwise derived from the URI.
+        short_name:
+          type: string
+          description: The URI's unqualified leaf name, for display next to `type`.
+        authority:
+          type: string
+          description: The URI's authority segment — the asset's provider or parent.
+        source:
+          $ref: "#/components/schemas/DiscoverySource"
+        monitoring_status:
+          $ref: "#/components/schemas/MonitoringStatus"
+        risk_tier:
+          $ref: "#/components/schemas/RiskTier"
+        risk_tier_label:
+          type: string
+          description: Display label for risk_tier.
+        endpoint_count:
+          type: integer
+          description: Endpoints the asset was observed on.
+        policies_count:
+          type: integer
+          nullable: true
+          description: |
+            Governance policies currently attached to the asset. Null — not zero —
+            when no count exists for the asset: a type governance policies cannot
+            attach to, or an asset not yet swept. Zero means counted, none
+            attached.
+        risks_count:
+          type: integer
+          description: Distinct risk profiles with an open finding on the asset.
+        primary_endpoint:
+          $ref: "#/components/schemas/PrimaryEndpoint"
+        first_seen:
+          type: string
+          format: date-time
+        last_seen:
+          type: string
+          format: date-time
+
+    InventoryEntity:
+      description: |
+        An inventory entity with its raw metadata bag. Every field of
+        `InventorySummary` plus `metadata`, so the list and single-item reads
+        cannot drift.
+      allOf:
+        - $ref: "#/components/schemas/InventorySummary"
+        - type: object
+          properties:
+            metadata:
+              type: object
+              additionalProperties: true
+              description: Raw entity metadata properties (e.g., service_name, hostname, model_provider).
+
+    InventoryList:
+      description: A page of inventory entities with cursor pagination.
+      allOf:
+        - $ref: "#/components/schemas/PageInfo"
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: "#/components/schemas/InventorySummary" }
+
+    InventoryTagsUpdate:
+      type: object
+      additionalProperties: false
+      required: [uri]
+      properties:
+        uri:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          description: URI of the inventory entity to update.
+        version:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: >-
+            Tag this version of the skill, plugin or MCP server, its
+            `version_key`, instead of the entity.
+        add:
+          type: array
+          items: { type: string }
+          description: Tags to add to the entity's tag set.
+        remove:
+          type: array
+          items: { type: string }
+          description: Tags to remove from the entity's tag set.
+
+    ManagedTagsReplace:
+      type: object
+      additionalProperties: false
+      required: [uri, tags]
+      properties:
+        uri:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          description: URI of the inventory entity to write.
+        tags:
+          type: array
+          items: { type: string }
+          description: >-
+            The complete managed tag set for the entity. Replaces the previous
+            set; an empty array clears it.
+
+    InventoryTagsState:
+      type: object
+      required: [uri, tags]
+      properties:
+        uri:
+          type: string
+        version:
+          type: string
+          description: The version tagged; absent for the entity's own tags.
+        tags:
+          type: array
+          items: { type: string }
+          description: >-
+            The full tag set after the update, sorted: the version's own when
+            `version` is set, else the entity's.
+
+    ManifestScanResult:
+      oneOf:
+        - $ref: "#/components/schemas/ManifestSkillScanResult"
+        - $ref: "#/components/schemas/ManifestMcpServerScanResult"
+        - $ref: "#/components/schemas/ManifestPluginScanResult"
+        - $ref: "#/components/schemas/ManifestVsxScanResult"
+      discriminator:
+        propertyName: type
+        mapping:
+          skill: "#/components/schemas/ManifestSkillScanResult"
+          mcp_server: "#/components/schemas/ManifestMcpServerScanResult"
+          plugin: "#/components/schemas/ManifestPluginScanResult"
+          vsx: "#/components/schemas/ManifestVsxScanResult"
+
+    ManifestSkillScanResult:
+      type: object
+      required: [type, name, source, owner, skill_id, severity]
+      properties:
+        type:
+          type: string
+          enum: [skill]
+        asset_url:
+          type: string
+          description: Deep-link to the manifold manifest UI for this skill.
+        name:
+          type: string
+        description:
+          type: string
+        source:
+          type: string
+        registry_url:
+          type: string
+          description: Upstream registry page for the skill.
+        popularity:
+          type: integer
+        popularity_type:
+          type: string
+        owner:
+          type: string
+        repo:
+          type: string
+        skill_id:
+          type: string
+        updated_at:
+          type: string
+        severity:
+          type: string
+          description: Manifest assessed severity; `unknown` means no scan rated it.
+          enum: [critical, high, medium, low, none, unknown]
+        version:
+          type: string
+        content_hash:
+          type: string
+        categories:
+          type: array
+          description: Manifest categories for the skill.
+          items:
+            type: string
+        repo_created_at:
+          type: string
+          description: When the backing repository was created. Absent when it declares no repo or the scan has not reached it.
+        repo_last_commit_at:
+          type: string
+          description: >-
+            Newest commit on the backing repository's default branch, as of the
+            last scan. Absent when unknown — never a stand-in for "no activity".
+        repo_latest_release_at:
+          type: string
+          description: >-
+            When the backing repository's latest release was published — the
+            newest stable release, else the newest prerelease. Absent when the
+            repo has published none.
+        repo_latest_release_tag:
+          type: string
+          description: >-
+            Tag that release shipped under, exactly as the publisher named it
+            (e.g. `v2.1.0`). No version semantics implied; order by
+            `repo_latest_release_at`.
+        security_findings:
+          type: array
+          items: { $ref: "#/components/schemas/ManifestPatternMatch" }
+
+    ManifestMcpServerScanResult:
+      type: object
+      required: [type, server_name, source, owner, slug, severity]
+      properties:
+        type:
+          type: string
+          enum: [mcp_server]
+        asset_url:
+          type: string
+          description: Deep-link to the manifold manifest UI for this MCP server.
+        is_builtin:
+          type: boolean
+          description: First-party builtin (no Manifest index data available).
+        server_name:
+          type: string
+        source:
+          type: string
+        owner:
+          type: string
+        slug:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        repository_url:
+          type: string
+          description: Upstream code repository for the MCP server.
+        severity:
+          type: string
+          description: Manifest assessed severity; `unknown` means no scan rated it.
+          enum: [critical, high, medium, low, none, unknown]
+        lineage_score:
+          type: integer
+        static_score:
+          type: integer
+        normalized_name:
+          type: string
+        ecosystem_rank:
+          type: integer
+        is_primary:
+          type: boolean
+        cluster_size:
+          type: integer
+        categories:
+          type: array
+          description: Manifest categories for the MCP server.
+          items:
+            type: string
+        updated_at:
+          type: string
+          description: When the MCP server was last scanned.
+        repo_created_at:
+          type: string
+          description: When the backing repository was created. Absent when it declares no repo or the scan has not reached it.
+        repo_last_commit_at:
+          type: string
+          description: >-
+            Newest commit on the backing repository's default branch, as of the
+            last scan. Absent when unknown — never a stand-in for "no activity".
+        repo_latest_release_at:
+          type: string
+          description: >-
+            When the backing repository's latest release was published — the
+            newest stable release, else the newest prerelease. Absent when the
+            repo has published none.
+        repo_latest_release_tag:
+          type: string
+          description: >-
+            Tag that release shipped under, exactly as the publisher named it
+            (e.g. `v2.1.0`). No version semantics implied; order by
+            `repo_latest_release_at`.
+        security_findings:
+          type: array
+          items: { $ref: "#/components/schemas/ManifestPatternMatch" }
+
+    ManifestPluginScanResult:
+      type: object
+      required: [type, name, source, owner, slug, severity]
+      properties:
+        type:
+          type: string
+          enum: [plugin]
+        name:
+          type: string
+        source:
+          type: string
+        owner:
+          type: string
+        slug:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        homepage:
+          type: string
+        github_url:
+          type: string
+        registry_url:
+          type: string
+          description: Upstream registry page for the plugin.
+        marketplaces:
+          type: array
+          items:
+            type: string
+          description: Marketplace repos carrying this plugin.
+        category:
+          type: string
+        popularity:
+          type: integer
+        popularity_type:
+          type: string
+        severity:
+          type: string
+          description: Manifest assessed severity; `unknown` means no scan rated it.
+          enum: [critical, high, medium, low, none, unknown]
+        lineage_score:
+          type: integer
+        static_score:
+          type: integer
+        skill_count:
+          type: integer
+          description: Embedded skill components in the resolved edition.
+        mcp_server_count:
+          type: integer
+          description: Referenced MCP servers in the resolved edition.
+        normalized_name:
+          type: string
+        ecosystem_rank:
+          type: integer
+        is_primary:
+          type: boolean
+        cluster_size:
+          type: integer
+        updated_at:
+          type: string
+          description: When the plugin was last scanned.
+        repo_created_at:
+          type: string
+          description: When the backing repository was created. Absent when it declares no repo or the scan has not reached it.
+        repo_last_commit_at:
+          type: string
+          description: >-
+            Newest commit on the backing repository's default branch, as of the
+            last scan. Absent when unknown — never a stand-in for "no activity".
+        repo_latest_release_at:
+          type: string
+          description: >-
+            When the backing repository's latest release was published — the
+            newest stable release, else the newest prerelease. Absent when the
+            repo has published none.
+        repo_latest_release_tag:
+          type: string
+          description: >-
+            Tag that release shipped under, exactly as the publisher named it
+            (e.g. `v2.1.0`). No version semantics implied; order by
+            `repo_latest_release_at`.
+        security_findings:
+          type: array
+          items: { $ref: "#/components/schemas/ManifestPatternMatch" }
+
+    ManifestVsxScanResult:
+      type: object
+      description: >-
+        A VSX extension's catalog answer: the scan of the installed version,
+        or of the catalog's latest edition when that version was never scanned
+        (see `version_match`).
+      required: [type, name, source, owner, slug, severity]
+      properties:
+        type:
+          type: string
+          enum: [vsx]
+        name:
+          type: string
+        source:
+          type: string
+          description: Registry the answer came from (e.g. `openvsx`).
+        owner:
+          type: string
+          description: Registry namespace (publisher).
+        slug:
+          type: string
+        version:
+          type: string
+          description: Catalog version the severity describes.
+        requested_version:
+          type: string
+          description: Installed version the catalog was asked about.
+        version_match:
+          type: string
+          description: >-
+            `exact` when the catalog scanned the installed version;
+            `latest_known` when it did not, so the severity describes the
+            catalog's latest edition instead. Absent when no version was asked.
+          enum: [exact, latest_known]
+        severity:
+          type: string
+          description: Manifest assessed severity; `unknown` means no scan rated it.
+          enum: [critical, high, medium, low, none, unknown]
+        lineage_score:
+          type: integer
+        static_score:
+          type: integer
+        description:
+          type: string
+        homepage:
+          type: string
+        github_url:
+          type: string
+        registry_url:
+          type: string
+          description: Upstream registry page for the extension.
+        category:
+          type: string
+        popularity:
+          type: integer
+        popularity_type:
+          type: string
+        normalized_name:
+          type: string
+        ecosystem_rank:
+          type: integer
+        is_primary:
+          type: boolean
+        cluster_size:
+          type: integer
+        updated_at:
+          type: string
+          description: When the extension was last scanned.
+        repo_created_at:
+          type: string
+          description: When the backing repository was created. Absent when it declares no repo or the scan has not reached it.
+        repo_last_commit_at:
+          type: string
+          description: >-
+            Newest commit on the backing repository's default branch, as of the
+            last scan. Absent when unknown — never a stand-in for "no activity".
+        repo_latest_release_at:
+          type: string
+          description: >-
+            When the backing repository's latest release was published — the
+            newest stable release, else the newest prerelease. Absent when the
+            repo has published none.
+        repo_latest_release_tag:
+          type: string
+          description: >-
+            Tag that release shipped under, exactly as the publisher named it
+            (e.g. `v2.1.0`). No version semantics implied; order by
+            `repo_latest_release_at`.
+        security_findings:
+          type: array
+          items: { $ref: "#/components/schemas/ManifestPatternMatch" }
+
+    ManifestPatternMatch:
+      type: object
+      required: [pattern_id, pattern_name, severity]
+      properties:
+        pattern_id:
+          type: string
+        pattern_name:
+          type: string
+        severity:
+          type: string
+          enum: [suspicious, malicious]
+        description:
+          type: string
+        confidence:
+          type: string
+          description: Rule confidence (high, medium, low).
+        source_file:
+          type: string
+          description: Bundle file the rule fired on.
+        origin:
+          type: string
+          description: >-
+            Match source (static, lineage, component, ecosystem, manual).
+            component = inherited from a bundled skill or MCP reference;
+            ecosystem = the non-primary clone trust penalty. Extensible; clients
+            MUST handle unknown values.
+
+    # Device fleet schemas. Copied from auth-api's /v1 spec (the proxy passes
+    # these bodies through verbatim); keep in sync if auth-api's shapes change.
+    FleetDevice:
+      type: object
+      description: |
+        One enrolled device in the fleet view: its identity joined with its
+        endpoint tracking. Tracking fields are nullable — null means the device
+        has not reported them yet (render as unknown).
+      required: [device_id, status, enrolled_at, metadata, groups]
+      properties:
+        device_id:
+          type: string
+          description: Hardware-derived device identifier.
+        status:
+          type: string
+          description: Device identity status (active, revoked, disabled).
+        enrolled_at:
+          type: string
+          format: date-time
+        hostname:
+          type: string
+          nullable: true
+          description: |
+            Device hostname from the reported metadata (captured at enrollment,
+            refreshed on every heartbeat); null when none reported.
+        last_seen:
+          type: string
+          format: date-time
+          nullable: true
+          description: Last liveness report; null when the device has not reported.
+        collector_version:
+          type: string
+          nullable: true
+          description: Reported endpoint-collector version; null when not reported.
+        operational_status:
+          type: string
+          nullable: true
+          description: Operational status (active, disabled); null when no tracking row yet.
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Endpoint tracking metadata.
+        groups:
+          type: array
+          description: |
+            Custom (admin-defined) endpoint groups this device belongs to;
+            empty when the device is in no group.
+          items:
+            $ref: "#/components/schemas/DeviceGroupRef"
+
+    DeviceGroupRef:
+      type: object
+      description: The slim identity of a custom endpoint group a device belongs to.
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Stable group identifier.
+        name:
+          type: string
+          description: Group name; a human-facing display label.
+
+    FleetDeviceList:
+      type: object
+      description: A page of enrolled devices with pagination metadata.
+      required: [devices, page, per_page, total]
+      properties:
+        devices:
+          type: array
+          items: { $ref: "#/components/schemas/FleetDevice" }
+        page:
+          type: integer
+          description: Zero-based page index of this page.
+        per_page:
+          type: integer
+          description: Page size used for this page.
+        total:
+          type: integer
+          description: Total number of enrolled devices across all pages.
+
+    DeviceFilterResult:
+      type: object
+      description: |
+        The result of a fleet filter. In facet mode `groups` holds per-value
+        counts and `devices` is null; in group drill-in mode (`value` set)
+        `devices` holds the group's endpoint details and `groups` is null.
+      required: [key, total]
+      properties:
+        key:
+          type: string
+          description: The dimension the fleet was filtered by.
+        groups:
+          type: array
+          nullable: true
+          description: Per-value counts (facet mode). Null when drilling into a group.
+          items: { $ref: "#/components/schemas/DeviceFilterCount" }
+        devices:
+          type: array
+          nullable: true
+          description: The group's endpoint details (drill-in mode). Null in facet mode.
+          items: { $ref: "#/components/schemas/FleetDevice" }
+        total:
+          type: integer
+          description: |
+            Bucketed device count (facet mode; equals the fleet size for
+            os/platform, may exceed it for the overlapping group facet) or the
+            number of devices returned (drill-in mode).
+
+    DeviceFilterCount:
+      type: object
+      description: The device count for one value of a filtered metadata key.
+      required: [count]
+      properties:
+        value:
+          type: string
+          nullable: true
+          description: The metadata value for this bucket; null groups devices reporting no value.
+        count:
+          type: integer
+          description: Number of devices in this bucket.
+
+    CustomDeviceGroup:
+      type: object
+      description: A custom (admin-defined) endpoint group.
+      required: [id, name, description, member_count, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Stable group identifier.
+        name:
+          type: string
+          description: Unique group name; a human-facing display label.
+        description:
+          type: string
+          description: Free-text group description; empty when unset.
+        member_count:
+          type: integer
+          description: Number of devices currently assigned to the group.
+        created_at:
+          type: string
+          format: date-time
+
+    CustomDeviceGroupList:
+      type: object
+      description: The custom endpoint groups.
+      required: [groups]
+      properties:
+        groups:
+          type: array
+          items: { $ref: "#/components/schemas/CustomDeviceGroup" }
+
+    DeviceGroupMemberList:
+      type: object
+      description: |
+        The devices assigned to a custom endpoint group. Not paginated — the
+        full membership is returned, so it carries no pagination metadata.
+      required: [devices]
+      properties:
+        devices:
+          type: array
+          items: { $ref: "#/components/schemas/FleetDevice" }
+
+    CreateDeviceGroupRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Za-z0-9 _.-]+$'
+          description: Unique group name.
+        description:
+          type: string
+          maxLength: 256
+          description: Optional free-text description.
+
+    UpdateDeviceRequest:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+          description: |
+            Whether the collector is operationally enabled. `false` disables it;
+            `true` re-enables it. Operational only — the device's mTLS identity
+            and certificate are unaffected.
+
+  parameters:
+    CursorParam:
+      name: cursor
+      in: query
+      schema: { type: string }
+      description: |
+        Opaque cursor from a previous page's `next_cursor` (walks forward) or
+        `prev_cursor` (walks backward). Each token carries its own direction, so
+        one parameter serves both; omit it for the first page.
+
+        A cursor is bound to the filter set and sort it was issued for. Replaying
+        one under a different combination is rejected with 400
+        `cursor_inconsistent` rather than silently restarting the walk, which on
+        an extraction API would duplicate rows with no signal.
+    IfMatchParam:
+      name: If-Match
+      in: header
+      required: false
+      description: |
+        The `ETag` from the most recent read of this resource. When present the
+        edit applies only if the resource is still at that version; otherwise it
+        is refused with 412 and nothing is written. Omit it to edit
+        unconditionally.
+      schema: { type: string }
+    SortOrderParam:
+      name: sort_order
+      in: query
+      description: Sort direction. Defaults to `desc`.
+      schema: { $ref: "#/components/schemas/SortOrder" }
+    LimitParam:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 250
+        default: 50
+    InventoryUriParam:
+      name: uri
+      in: query
+      required: true
+      description: |
+        Inventory URI (e.g. `agent:claude:abc`, `mcp_server:owner/slug`).
+        Sent as a query parameter rather than a path parameter so the
+        `:` and `/` characters in URIs do not have to be percent-encoded
+        into a single path segment.
+      schema: { type: string, minLength: 1, maxLength: 1024 }
+
+  responses:
+    BadRequest:
+      description: Bad request.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Forbidden:
+      description: Authenticated but not authorized.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    NotFound:
+      description: Resource not found.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    PreconditionFailed:
+      description: |
+        The `If-Match` version no longer matches: someone else changed the
+        resource since it was read. Nothing was written.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Conflict:
+      description: Conflict (e.g., unique violation).
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    UnprocessableEntity:
+      description: Semantically invalid (e.g., invalid status transition).
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    TooManyRequests:
+      description: Rate limit exceeded.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+      headers:
+        Retry-After:
+          schema: { type: integer }
+          description: Seconds until the next request is permitted.
+    InternalError:
+      description: Internal server error.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }

@@ -1,0 +1,32 @@
+version: "2"
+linters:
+  default: none
+  enable:
+    - copyloopvar
+    - depguard
+    - durationcheck
+    - errcheck
+    - forcetypeassert
+    - godot
+    - ineffassign
+    - makezero
+    - misspell
+    - nilerr
+    - predeclared
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    - usetesting
+  settings:
+    depguard:
+      rules:
+        main:
+          deny:
+            - pkg: github.com/hashicorp/terraform-plugin-sdk/v2
+              desc: use terraform-plugin-framework and terraform-plugin-testing
+  exclusions:
+    generated: strict
+formatters:
+  enable:
+    - gofmt
