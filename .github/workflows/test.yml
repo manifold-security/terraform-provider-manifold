@@ -45,6 +45,7 @@ jobs:
     # The client secret can write policies on sandbox, so only merged code gets it.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.MANIFOLD_ENDPOINT != ''
     environment: acceptance
+    # One run at a time on the shared tenant; a newer push replaces a queued one, so the latest main always runs.
     concurrency:
       group: acceptance-sandbox
       cancel-in-progress: false
