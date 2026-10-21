@@ -38,6 +38,7 @@ jobs:
 
   acceptance:
     needs: build
+    if: vars.MANIFOLD_ENDPOINT != ''
     runs-on: ubuntu-latest
     env:
       MANIFOLD_ENDPOINT: ${{ vars.MANIFOLD_ENDPOINT }}

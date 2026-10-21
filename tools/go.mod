@@ -1,6 +1,6 @@
 module github.com/manifold-security/terraform-provider-manifold/tools
 
-go 1.27.1
+go 1.26.0
 
 tool (
 	github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs
