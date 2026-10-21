@@ -24,7 +24,7 @@ test:
 # Runs against a real instance; see README for the MANIFOLD_* variables.
 testacc:
 	TF_ACC=1 TF_ACC_TERRAFORM_PATH=$$(command -v $(TF_BIN)) TF_ACC_PROVIDER_NAMESPACE=manifold-security \
-		go test -v -cover -timeout 120m ./...
+		go test -v -cover -timeout 30m ./...
 
 # Deletes tf-acc-* policies leaked by interrupted acceptance runs.
 sweep:

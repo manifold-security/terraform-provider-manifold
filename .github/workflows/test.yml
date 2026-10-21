@@ -11,6 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -24,6 +25,7 @@ jobs:
 
   generate:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -34,12 +36,20 @@ jobs:
           tofu_wrapper: false
       - run: make generate
       - name: Generated code and docs are committed
-        run: git diff --exit-code
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain)" || { git status --porcelain; exit 1; }
 
   acceptance:
     needs: build
-    if: vars.MANIFOLD_ENDPOINT != ''
+    # The client secret can write policies on sandbox, so only merged code gets it.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.MANIFOLD_ENDPOINT != ''
+    environment: acceptance
+    concurrency:
+      group: acceptance-sandbox
+      cancel-in-progress: false
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       MANIFOLD_ENDPOINT: ${{ vars.MANIFOLD_ENDPOINT }}
       MANIFOLD_AUTH_DOMAIN: ${{ vars.MANIFOLD_AUTH_DOMAIN }}
@@ -48,6 +58,7 @@ jobs:
       MANIFOLD_CLIENT_SECRET: ${{ secrets.MANIFOLD_CLIENT_SECRET }}
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         tofu: ["1.12.*", "1.13.*"]
     steps:
