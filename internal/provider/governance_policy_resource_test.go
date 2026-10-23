@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -98,6 +99,18 @@ func TestAccGovernancePolicyResource_lifecycle(t *testing.T) {
 				ImportState:   true,
 				ImportStateId: "not-a-uuid",
 				ExpectError:   regexp.MustCompile(`Expected a policy UUID`),
+			},
+			{
+				// A description-only edit sends just that field, so the stored Cedar isn't re-validated.
+				Config: strings.Replace(minimalPolicyConfig(name), "Created by", "Edited by", 1),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(policyAddr, plancheck.ResourceActionUpdate)},
+				},
+				ConfigStateChecks: []statecheck.StateCheck{
+					sameID.AddStateValue(policyAddr, tfjsonpath.New("id")),
+					statecheck.ExpectKnownValue(policyAddr, tfjsonpath.New("description"),
+						knownvalue.StringExact("Edited by terraform-provider-manifold acceptance tests.")),
+				},
 			},
 			{
 				Config: fullPolicyConfig(name),

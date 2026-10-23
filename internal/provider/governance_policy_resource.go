@@ -243,41 +243,32 @@ func (r *governancePolicyResource) Read(ctx context.Context, req resource.ReadRe
 }
 
 func (r *governancePolicyResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan governancePolicyDetailModel
+	var plan, state governancePolicyDetailModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	f, diags := authoredFields(ctx, plan)
+	body, diags := changedFields(ctx, plan, state)
 	resp.Diagnostics.Append(diags...)
 	etag, d := readETag(ctx, req.Private)
 	resp.Diagnostics.Append(d...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-
-	// An empty string is how the API clears a response message.
-	msg := plan.ResponseMessage.ValueString()
+	// The API rejects an empty PATCH, and with no authored field changed the prior state already matches the plan.
+	if body == (client.GovernancePolicyUpdate{}) {
+		resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+		return
+	}
 
 	id, err := uuid.Parse(plan.ID.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("id"), "Invalid policy id", err.Error())
 		return
 	}
-	out, err := r.client.UpdateGovernancePolicyWithResponse(ctx, id, &client.UpdateGovernancePolicyParams{IfMatch: etag}, client.GovernancePolicyUpdate{
-		Title:            &f.title,
-		Description:      &f.description,
-		Category:         &f.category,
-		Action:           &f.action,
-		CedarPolicy:      &f.cedar,
-		Severity:         &f.severity,
-		Enabled:          &f.enabled,
-		Priority:         &f.priority,
-		ActionOptions:    &f.actionOptions,
-		TaxonomyMappings: &f.taxonomy,
-		ResponseMessage:  &msg,
-	})
+	out, err := r.client.UpdateGovernancePolicyWithResponse(ctx, id, &client.UpdateGovernancePolicyParams{IfMatch: etag}, body)
 	if err == nil && out.JSON200 == nil {
 		err = client.NewAPIError(out.StatusCode(), out.Body)
 	}
@@ -384,6 +375,49 @@ func authoredFields(ctx context.Context, m governancePolicyDetailModel) (policyF
 		actionOptions: client.GovernancePolicyActionOptionsInput{NotifyUser: &notify},
 		taxonomy:      taxonomy,
 	}, diags
+}
+
+// changedFields sends only what the plan changes: the API re-validates every field it receives, so
+// re-sending an untouched cedar_policy would make any edit fail once the Cedar schema has moved on.
+func changedFields(ctx context.Context, plan, state governancePolicyDetailModel) (client.GovernancePolicyUpdate, diag.Diagnostics) {
+	f, diags := authoredFields(ctx, plan)
+	var u client.GovernancePolicyUpdate
+	if !plan.Title.Equal(state.Title) {
+		u.Title = &f.title
+	}
+	if !plan.Description.Equal(state.Description) {
+		u.Description = &f.description
+	}
+	if !plan.Category.Equal(state.Category) {
+		u.Category = &f.category
+	}
+	if !plan.Action.Equal(state.Action) {
+		u.Action = &f.action
+	}
+	if !plan.CedarPolicy.Equal(state.CedarPolicy) {
+		u.CedarPolicy = &f.cedar
+	}
+	if !plan.Severity.Equal(state.Severity) {
+		u.Severity = &f.severity
+	}
+	if !plan.Enabled.Equal(state.Enabled) {
+		u.Enabled = &f.enabled
+	}
+	if !plan.Priority.Equal(state.Priority) {
+		u.Priority = &f.priority
+	}
+	if !plan.ActionOptions.Equal(state.ActionOptions) {
+		u.ActionOptions = &f.actionOptions
+	}
+	if !plan.TaxonomyMappings.Equal(state.TaxonomyMappings) {
+		u.TaxonomyMappings = &f.taxonomy
+	}
+	if !plan.ResponseMessage.Equal(state.ResponseMessage) {
+		// An empty string is how the API clears a response message.
+		msg := plan.ResponseMessage.ValueString()
+		u.ResponseMessage = &msg
+	}
+	return u, diags
 }
 
 type stateSetter interface {
