@@ -53,3 +53,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
+          # An rc and its final release share a commit, so don't let GoReleaser guess the tag.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
