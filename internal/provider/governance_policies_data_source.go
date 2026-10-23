@@ -148,11 +148,11 @@ func (d *governancePoliciesDataSource) Read(ctx context.Context, req datasource.
 		return
 	}
 
-	items := make([]governancePolicyModel, 0, len(policies))
+	items := make([]governancePolicyItemModel, 0, len(policies))
 	for _, p := range policies {
 		m, diags := newGovernancePolicyModel(ctx, p)
 		resp.Diagnostics.Append(diags...)
-		items = append(items, m)
+		items = append(items, governancePolicyItemModel{governancePolicyModel: m, UpdatedAt: timestamp(p.UpdatedAt)})
 	}
 	if resp.Diagnostics.HasError() {
 		return

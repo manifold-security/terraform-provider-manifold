@@ -144,10 +144,6 @@ func (r *governancePolicyResource) Schema(_ context.Context, _ resource.SchemaRe
 				Computed:            true,
 				PlanModifiers:       keep,
 			},
-			"updated_at": schema.StringAttribute{
-				MarkdownDescription: "RFC 3339 timestamp of the last change.",
-				Computed:            true,
-			},
 		},
 	}
 }

@@ -55,7 +55,7 @@ func (d *governancePolicyDataSource) Configure(_ context.Context, req datasource
 }
 
 func (d *governancePolicyDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	var cfg governancePolicyDetailModel
+	var cfg governancePolicyDataSourceModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -76,10 +76,11 @@ func (d *governancePolicyDataSource) Read(ctx context.Context, req datasource.Re
 		return
 	}
 
-	state, diags := newGovernancePolicyDetailModel(ctx, *r.JSON200)
+	m, diags := newGovernancePolicyDetailModel(ctx, *r.JSON200)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	state := governancePolicyDataSourceModel{governancePolicyDetailModel: m, UpdatedAt: timestamp(r.JSON200.UpdatedAt)}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
