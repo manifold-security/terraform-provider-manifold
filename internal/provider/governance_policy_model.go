@@ -27,12 +27,22 @@ type governancePolicyModel struct {
 	TaxonomyMappings types.List   `tfsdk:"taxonomy_mappings"`
 	ResponseMessage  types.String `tfsdk:"response_message"`
 	CreatedAt        types.String `tfsdk:"created_at"`
-	UpdatedAt        types.String `tfsdk:"updated_at"`
 }
 
 type governancePolicyDetailModel struct {
 	governancePolicyModel
 	CedarPolicy types.String `tfsdk:"cedar_policy"`
+}
+
+// The resource leaves updated_at out so an in-place update doesn't plan it as unknown; only the data sources expose it.
+type governancePolicyItemModel struct {
+	governancePolicyModel
+	UpdatedAt types.String `tfsdk:"updated_at"`
+}
+
+type governancePolicyDataSourceModel struct {
+	governancePolicyDetailModel
+	UpdatedAt types.String `tfsdk:"updated_at"`
 }
 
 var actionOptionsAttrTypes = map[string]attr.Type{
@@ -153,9 +163,12 @@ func newGovernancePolicyModel(ctx context.Context, p client.GovernancePolicySumm
 		Owner:            types.StringValue(p.Owner),
 		TaxonomyMappings: mappings,
 		ResponseMessage:  types.StringPointerValue(p.ResponseMessage),
-		CreatedAt:        types.StringValue(p.CreatedAt.UTC().Format(time.RFC3339Nano)),
-		UpdatedAt:        types.StringValue(p.UpdatedAt.UTC().Format(time.RFC3339Nano)),
+		CreatedAt:        timestamp(p.CreatedAt),
 	}, diags
+}
+
+func timestamp(t time.Time) types.String {
+	return types.StringValue(t.UTC().Format(time.RFC3339Nano))
 }
 
 func newGovernancePolicyDetailModel(ctx context.Context, p client.GovernancePolicy) (governancePolicyDetailModel, diag.Diagnostics) {
@@ -174,7 +187,6 @@ func newGovernancePolicyDetailModel(ctx context.Context, p client.GovernancePoli
 		TaxonomyMappings: p.TaxonomyMappings,
 		ResponseMessage:  p.ResponseMessage,
 		CreatedAt:        p.CreatedAt,
-		UpdatedAt:        p.UpdatedAt,
 	}
 	m, diags := newGovernancePolicyModel(ctx, summary)
 	return governancePolicyDetailModel{

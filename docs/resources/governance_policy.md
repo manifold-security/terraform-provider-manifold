@@ -67,7 +67,6 @@ resource "manifold_governance_policy" "no_prod_db_writes" {
 - `id` (String) The policy's identifier, a server-assigned UUID.
 - `is_managed` (Boolean) Always `false` for a policy managed here.
 - `owner` (String) The client that created the policy.
-- `updated_at` (String) RFC 3339 timestamp of the last change.
 
 <a id="nestedatt--action_options"></a>
 ### Nested Schema for `action_options`
