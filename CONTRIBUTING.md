@@ -37,7 +37,7 @@ Conventional Commits, one logical change per commit. The commit message is where
 
 The provider is licensed under Apache-2.0. Under section 5 of the [LICENSE](LICENSE), a contribution you submit for inclusion is licensed under the same terms, with no additional terms or conditions, unless you explicitly state otherwise.
 
-Each commit must carry a sign-off certifying the [Developer Certificate of Origin 1.1](https://developercertificate.org/). Add it with `git commit -s`, which appends a `Signed-off-by:` line with your committer name and email.
+Please sign off each commit to certify the [Developer Certificate of Origin 1.1](https://developercertificate.org/). `git commit -s` appends a `Signed-off-by:` line with your committer name and email.
 
 ## Code of conduct
 
