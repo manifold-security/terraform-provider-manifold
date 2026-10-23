@@ -66,7 +66,7 @@ make install     # builds into $(go env GOPATH)/bin
 make test        # unit tests, no network
 make lint
 make generate    # regenerates the API client and docs; CI fails if they drift
-make spec        # refreshes api/management-v1.yaml from ../docs origin/main
+make spec        # maintainers: refreshes api/management-v1.yaml from the docs repo
 ```
 
 To run your own configs against a local build, add a dev override to your CLI config file. That's `~/.terraformrc` for Terraform, `~/.tofurc` for OpenTofu, or whatever file `TF_CLI_CONFIG_FILE` points at:
@@ -82,20 +82,9 @@ provider_installation {
 
 With the override in place you can run plan and apply straight away; `init` isn't needed for the overridden provider. Take the override out when you're done, or every other config that uses this provider will pick up the dev build too.
 
-### Testing against a dev tenant
+### Acceptance tests
 
-Dev instances run at `<name>.demo.manifoldsecurity.io` and get tokens from `auth.manifoldsecurity.dev`. Most people share `sandbox`. Create an OIDC client with `read:policies` and `write:policies` in that instance's dashboard, then:
-
-```sh
-export MANIFOLD_ENDPOINT=https://sandbox.demo.manifoldsecurity.io
-export MANIFOLD_AUTH_DOMAIN=auth.manifoldsecurity.dev
-export MANIFOLD_ORGANIZATION=org_...
-export MANIFOLD_CLIENT_ID=...
-export MANIFOLD_CLIENT_SECRET=...
-make testacc
-```
-
-The acceptance tests (`TestAcc*`) drive the real CLI binary and only run under `make testacc`. CI reads the same variables from the repo's `vars` and `secrets`, and skips the job when they aren't set.
+The acceptance tests (`TestAcc*`) drive the real CLI binary against a live Manifold instance and only run under `make testacc`. They need an OIDC client with `read:policies` and `write:policies`, and the `MANIFOLD_*` variables from [Authentication](#authentication) exported in your shell. CI runs them on `main` from the `acceptance` environment and skips the job when it isn't configured.
 
 Each test creates the policies it needs and titles them `tf-acc-*`. A run that dies halfway can leave some behind; `make sweep` deletes them.
 
@@ -112,6 +101,10 @@ Policies with `is_managed = true` belong to Manifold and the API won't let anyon
 The resource stores the `ETag` from its last read in private state and sends it as `If-Match` on update and delete. If someone edits the policy in the dashboard between plan and apply, the apply fails rather than silently overwriting their change. Edits made before the plan just appear as drift.
 
 `severity`, `enabled`, `priority`, `action_options` and `taxonomy_mappings` have the API's defaults written into the schema. Deleting one of them from your config puts the policy back to the default instead of leaving whatever value it had last.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
