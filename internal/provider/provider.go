@@ -21,6 +21,8 @@ var _ provider.Provider = &manifoldProvider{}
 
 type manifoldProvider struct {
 	version string
+	// tokenURL replaces https://<auth_domain>/oauth/token so unit tests can point at a plain-http fake.
+	tokenURL string
 }
 
 type manifoldProviderModel struct {
@@ -119,6 +121,9 @@ func (p *manifoldProvider) Configure(ctx context.Context, req provider.Configure
 	}
 
 	c.TokenURL = "https://" + authDomain + "/oauth/token"
+	if p.tokenURL != "" {
+		c.TokenURL = p.tokenURL
+	}
 	c.UserAgent = fmt.Sprintf("terraform-provider-manifold/%s (+https://github.com/manifold-security/terraform-provider-manifold) Terraform/%s", p.version, req.TerraformVersion)
 
 	m, err := client.New(ctx, c)
@@ -133,6 +138,7 @@ func (p *manifoldProvider) Configure(ctx context.Context, req provider.Configure
 func (p *manifoldProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewGovernancePolicyResource,
+		NewThreatDetectionRuleResource,
 	}
 }
 
@@ -140,5 +146,7 @@ func (p *manifoldProvider) DataSources(_ context.Context) []func() datasource.Da
 	return []func() datasource.DataSource{
 		NewGovernancePolicyDataSource,
 		NewGovernancePoliciesDataSource,
+		NewThreatDetectionRuleDataSource,
+		NewThreatDetectionRulesDataSource,
 	}
 }

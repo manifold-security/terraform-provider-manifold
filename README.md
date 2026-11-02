@@ -2,13 +2,16 @@
 
 Manage your [Manifold](https://www.manifold.security) configuration as code. The provider talks to the Manifold [management API](https://docs.manifoldsecurity.io/api-reference/management-api) and works with both Terraform and OpenTofu, so platform settings can live in version control and change through the same review process as the rest of your infrastructure.
 
-It covers governance policies today, and more of the management API will follow.
+It covers governance policies and threat detection rules today, and more of the management API will follow.
 
 | Kind | Name | What it does |
 | --- | --- | --- |
 | Resource | `manifold_governance_policy` | Creates, updates and deletes customer-authored policies. Import takes the policy UUID. |
 | Data source | `manifold_governance_policy` | Reads one policy by id, Cedar rule included. |
 | Data source | `manifold_governance_policies` | Lists the catalog, managed and customer-authored, with optional filters. |
+| Resource | `manifold_threat_detection_rule` | Tunes a built-in detection rule (`enabled`, `severity`). Import takes the rule id. |
+| Data source | `manifold_threat_detection_rule` | Reads one detection rule by id, with what it detects. |
+| Data source | `manifold_threat_detection_rules` | Lists detection rules with optional filters. |
 
 Full reference docs are in [`docs/`](docs/), with working configurations in [`examples/`](examples/).
 
@@ -44,8 +47,12 @@ The provider logs in as an OIDC client using the OAuth2 client credentials flow.
 
 | Scope | Needed for |
 | --- | --- |
-| `read:policies` | data sources, plan, refresh |
-| `write:policies` | create, update, delete |
+| `read:policies` | governance policy data sources, plan, refresh |
+| `write:policies` | governance policy create, update, delete |
+| `read:threats` | detection rule data sources, plan, refresh |
+| `write:threats` | detection rule tuning |
+
+Grant only the scopes for what your configuration manages.
 
 | Attribute | Env var | Example |
 | --- | --- | --- |
@@ -84,9 +91,9 @@ With the override in place you can run plan and apply straight away; `init` isn'
 
 ### Acceptance tests
 
-The acceptance tests (`TestAcc*`) drive the real CLI binary against a live Manifold instance and only run under `make testacc`. They need an OIDC client with `read:policies` and `write:policies`, and the `MANIFOLD_*` variables from [Authentication](#authentication) exported in your shell. CI runs them on `main` from the `acceptance` environment and skips the job when it isn't configured.
+The acceptance tests (`TestAcc*`) drive the real CLI binary against a live Manifold instance and only run under `make testacc`. They need an OIDC client with `read:policies`, `write:policies`, `read:threats` and `write:threats`, and the `MANIFOLD_*` variables from [Authentication](#authentication) exported in your shell. CI runs them on `main` from the `acceptance` environment and skips the job when it isn't configured.
 
-Each test creates the policies it needs and titles them `tf-acc-*`. A run that dies halfway can leave some behind; `make sweep` deletes them.
+Each test creates the policies it needs and titles them `tf-acc-*`. A run that dies halfway can leave some behind; `make sweep` deletes them. Detection rules can't be created, so the rule test retunes whichever rule the list returns first and puts it back afterwards.
 
 ## Design notes
 
@@ -101,6 +108,8 @@ Policies with `is_managed = true` belong to Manifold and the API won't let anyon
 The resource stores the `ETag` from its last read in private state and sends it as `If-Match` on update and delete. If someone edits the policy in the dashboard between plan and apply, the apply fails rather than silently overwriting their change. Edits made before the plan just appear as drift.
 
 `severity`, `enabled`, `priority`, `action_options` and `taxonomy_mappings` have the API's defaults written into the schema. Deleting one of them from your config puts the policy back to the default instead of leaving whatever value it had last.
+
+Detection rules are Manifold's and can't be created or deleted, so `manifold_threat_detection_rule` adopts an existing rule by id and manages only the attributes you set. The API doesn't expose a rule's defaults, so there is nothing to reset to: leaving `enabled` or `severity` out keeps its current value, and destroying the resource only removes it from state, with the rule keeping its last tuning. Rule updates use the same `ETag`/`If-Match` guard as policies.
 
 ## Contributing
 

@@ -74,16 +74,16 @@ func (e GovernancePolicyCategory) Valid() bool {
 
 // Defines values for GovernancePolicySortBy.
 const (
-	Title     GovernancePolicySortBy = "title"
-	UpdatedAt GovernancePolicySortBy = "updated_at"
+	GovernancePolicySortByTitle     GovernancePolicySortBy = "title"
+	GovernancePolicySortByUpdatedAt GovernancePolicySortBy = "updated_at"
 )
 
 // Valid indicates whether the value is a known member of the GovernancePolicySortBy enum.
 func (e GovernancePolicySortBy) Valid() bool {
 	switch e {
-	case Title:
+	case GovernancePolicySortByTitle:
 		return true
-	case UpdatedAt:
+	case GovernancePolicySortByUpdatedAt:
 		return true
 	default:
 		return false
@@ -126,6 +126,24 @@ func (e SortOrder) Valid() bool {
 	case Asc:
 		return true
 	case Desc:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ThreatDetectionRuleSortBy.
+const (
+	ThreatDetectionRuleSortByTitle     ThreatDetectionRuleSortBy = "title"
+	ThreatDetectionRuleSortByUpdatedAt ThreatDetectionRuleSortBy = "updated_at"
+)
+
+// Valid indicates whether the value is a known member of the ThreatDetectionRuleSortBy enum.
+func (e ThreatDetectionRuleSortBy) Valid() bool {
+	switch e {
+	case ThreatDetectionRuleSortByTitle:
+		return true
+	case ThreatDetectionRuleSortByUpdatedAt:
 		return true
 	default:
 		return false
@@ -557,6 +575,83 @@ type SeverityInput string
 // SortOrder Sort direction. Defaults to `desc`.
 type SortOrder string
 
+// ThreatDetectionRule defines model for ThreatDetectionRule.
+type ThreatDetectionRule struct {
+	Category    string    `json:"category"`
+	CreatedAt   time.Time `json:"created_at"`
+	Description string    `json:"description"`
+
+	// DetectionRuleId The rule's identifier (e.g. `EXEC-015`). This is what a threat names.
+	DetectionRuleId string `json:"detection_rule_id"`
+
+	// Enabled Whether the rule runs. A disabled rule raises nothing new.
+	Enabled bool `json:"enabled"`
+
+	// Owner Who maintains the rule, as recorded on it.
+	Owner           string `json:"owner"`
+	PotentialImpact string `json:"potential_impact"`
+
+	// Severity Severity the threats this rule raises inherit.
+	Severity string `json:"severity"`
+
+	// TaxonomyMappings Framework codes the rule maps to.
+	TaxonomyMappings []string `json:"taxonomy_mappings"`
+	Title            string   `json:"title"`
+
+	// UpdatedAt When the rule was last tuned. The default sort walks this.
+	UpdatedAt     time.Time `json:"updated_at"`
+	WhatItDetects string    `json:"what_it_detects"`
+	WhyItMatters  string    `json:"why_it_matters"`
+}
+
+// ThreatDetectionRuleList defines model for ThreatDetectionRuleList.
+type ThreatDetectionRuleList struct {
+	Data       []ThreatDetectionRuleSummary `json:"data"`
+	HasNext    bool                         `json:"has_next"`
+	HasPrev    bool                         `json:"has_prev"`
+	NextCursor *string                      `json:"next_cursor,omitempty"`
+	PrevCursor *string                      `json:"prev_cursor,omitempty"`
+}
+
+// ThreatDetectionRuleSortBy Sortable fields on the rule catalog. `updated_at` is the one to walk to
+// pick up tuning changes.
+type ThreatDetectionRuleSortBy string
+
+// ThreatDetectionRuleSummary One detection rule, without its explanatory text.
+type ThreatDetectionRuleSummary struct {
+	Category    string    `json:"category"`
+	CreatedAt   time.Time `json:"created_at"`
+	Description string    `json:"description"`
+
+	// DetectionRuleId The rule's identifier (e.g. `EXEC-015`). This is what a threat names.
+	DetectionRuleId string `json:"detection_rule_id"`
+
+	// Enabled Whether the rule runs. A disabled rule raises nothing new.
+	Enabled bool `json:"enabled"`
+
+	// Owner Who maintains the rule, as recorded on it.
+	Owner string `json:"owner"`
+
+	// Severity Severity the threats this rule raises inherit.
+	Severity string `json:"severity"`
+
+	// TaxonomyMappings Framework codes the rule maps to.
+	TaxonomyMappings []string `json:"taxonomy_mappings"`
+	Title            string   `json:"title"`
+
+	// UpdatedAt When the rule was last tuned. The default sort walks this.
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ThreatDetectionRuleUpdate Partial tuning of one rule. Every field is optional; at least one must be
+// present. What the rule detects is not editable.
+type ThreatDetectionRuleUpdate struct {
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Severity Severity value accepted by the server on the severity filter.
+	Severity *SeverityInput `json:"severity,omitempty"`
+}
+
 // CursorParam defines model for CursorParam.
 type CursorParam = string
 
@@ -645,11 +740,57 @@ type UpdateGovernancePolicyParams struct {
 	IfMatch *IfMatchParam `json:"If-Match,omitempty"`
 }
 
+// ListThreatDetectionRulesParams defines parameters for ListThreatDetectionRules.
+type ListThreatDetectionRulesParams struct {
+	// Cursor Opaque cursor from a previous page's `next_cursor` (walks forward) or
+	// `prev_cursor` (walks backward). Each token carries its own direction, so
+	// one parameter serves both; omit it for the first page.
+	//
+	// A cursor is bound to the filter set and sort it was issued for. Replaying
+	// one under a different combination is rejected with 400
+	// `cursor_inconsistent` rather than silently restarting the walk, which on
+	// an extraction API would duplicate rows with no signal.
+	Cursor *CursorParam `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *LimitParam  `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// DetectionRuleId Filter to these rules (exact match). Repeatable; values OR together.
+	DetectionRuleId *[]string `form:"detection_rule_id,omitempty" json:"detection_rule_id,omitempty"`
+
+	// Category Filter by category. Repeatable; values OR together.
+	Category *[]string `form:"category,omitempty" json:"category,omitempty"`
+
+	// Severity Filter by severity. Repeatable; values OR together.
+	Severity *[]SeverityInput `form:"severity,omitempty" json:"severity,omitempty"`
+
+	// Enabled Filter to rules that run, or to those switched off.
+	Enabled *bool `form:"enabled,omitempty" json:"enabled,omitempty"`
+
+	// Framework Filter to rules mapping to this taxonomy code (e.g. `OWASP-ASI02`).
+	Framework *string `form:"framework,omitempty" json:"framework,omitempty"`
+
+	// Q Case-insensitive substring match on rule id, title, or description.
+	Q         *string                    `form:"q,omitempty" json:"q,omitempty"`
+	SortBy    *ThreatDetectionRuleSortBy `form:"sort_by,omitempty" json:"sort_by,omitempty"`
+	SortOrder *SortOrder                 `form:"sort_order,omitempty" json:"sort_order,omitempty"`
+}
+
+// UpdateThreatDetectionRuleParams defines parameters for UpdateThreatDetectionRule.
+type UpdateThreatDetectionRuleParams struct {
+	// IfMatch The `ETag` from the most recent read of this resource. When present the
+	// edit applies only if the resource is still at that version; otherwise it
+	// is refused with 412 and nothing is written. Omit it to edit
+	// unconditionally.
+	IfMatch *IfMatchParam `json:"If-Match,omitempty"`
+}
+
 // CreateGovernancePolicyJSONRequestBody defines body for CreateGovernancePolicy for application/json ContentType.
 type CreateGovernancePolicyJSONRequestBody = GovernancePolicyCreate
 
 // UpdateGovernancePolicyJSONRequestBody defines body for UpdateGovernancePolicy for application/json ContentType.
 type UpdateGovernancePolicyJSONRequestBody = GovernancePolicyUpdate
+
+// UpdateThreatDetectionRuleJSONRequestBody defines body for UpdateThreatDetectionRule for application/json ContentType.
+type UpdateThreatDetectionRuleJSONRequestBody = ThreatDetectionRuleUpdate
 
 // RequestEditorFn is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -915,6 +1056,89 @@ type ClientInterface interface {
 	//
 	// Corresponds with PATCH /governance/policies/{policyId} (the `UpdateGovernancePolicy` operationId).
 	UpdateGovernancePolicy(ctx context.Context, policyId openapi_types.UUID, params *UpdateGovernancePolicyParams, body UpdateGovernancePolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListThreatDetectionRules List threat detection rules.
+	//
+	// The rules the detection pipeline evaluates against agent activity, and how
+	// each one is tuned.
+	//
+	// Rules are maintained by Manifold: what they look for is code, not
+	// configuration, so there is nothing to author here and no create or delete.
+	// What you can change is how a rule is applied — `PATCH` a rule to retune its
+	// severity or switch it off.
+	//
+	// `enabled` is whether the rule runs at all.
+	//
+	// For what the rules have actually caught, see `GET /threats` — every threat
+	// names the rule that produced it in `detection_rule_id`.
+	//
+	// Corresponds with GET /threats/detection-rules (the `ListThreatDetectionRules` operationId).
+	ListThreatDetectionRules(ctx context.Context, params *ListThreatDetectionRulesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetThreatDetectionRule Get one threat detection rule.
+	//
+	// The rule, plus the text explaining what it detects and why it matters.
+	//
+	// Corresponds with GET /threats/detection-rules/{ruleId} (the `GetThreatDetectionRule` operationId).
+	GetThreatDetectionRule(ctx context.Context, ruleId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UpdateThreatDetectionRuleWithBody Tune one threat detection rule.
+	//
+	// Partial edit: send only the fields to change, at least one of them.
+	//
+	// Only the tuning fields are editable — `enabled`, `severity`. What the rule
+	// detects is code Manifold maintains, so the text and the detection itself
+	// are not editable from here; that is the difference between a detection
+	// rule and a governance policy, which you author yourself.
+	//
+	// Retuning `severity` applies to the threats the rule has already raised as
+	// well: severity is resolved when a threat is read, not stamped onto it, so
+	// historical severity breakdowns re-bucket accordingly.
+	//
+	// Switching a rule off stops it producing new threats. The threats it already
+	// raised stay — they record what was found — and stay triageable.
+	//
+	// Send `If-Match` with the `ETag` from the read this edit is based on and
+	// the write applies only if nobody has retuned the rule since; a stale
+	// version is refused with 412 and nothing is written. Without the header
+	// the edit is unconditional and the last writer wins.
+	//
+	// An edit that changes nothing does not move the version, so the `ETag`
+	// comes back unchanged.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with PATCH /threats/detection-rules/{ruleId} (the `UpdateThreatDetectionRule` operationId).
+	UpdateThreatDetectionRuleWithBody(ctx context.Context, ruleId string, params *UpdateThreatDetectionRuleParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UpdateThreatDetectionRule Tune one threat detection rule.
+	//
+	// Partial edit: send only the fields to change, at least one of them.
+	//
+	// Only the tuning fields are editable — `enabled`, `severity`. What the rule
+	// detects is code Manifold maintains, so the text and the detection itself
+	// are not editable from here; that is the difference between a detection
+	// rule and a governance policy, which you author yourself.
+	//
+	// Retuning `severity` applies to the threats the rule has already raised as
+	// well: severity is resolved when a threat is read, not stamped onto it, so
+	// historical severity breakdowns re-bucket accordingly.
+	//
+	// Switching a rule off stops it producing new threats. The threats it already
+	// raised stay — they record what was found — and stay triageable.
+	//
+	// Send `If-Match` with the `ETag` from the read this edit is based on and
+	// the write applies only if nobody has retuned the rule since; a stale
+	// version is refused with 412 and nothing is written. Without the header
+	// the edit is unconditional and the last writer wins.
+	//
+	// An edit that changes nothing does not move the version, so the `ETag`
+	// comes back unchanged.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with PATCH /threats/detection-rules/{ruleId} (the `UpdateThreatDetectionRule` operationId).
+	UpdateThreatDetectionRule(ctx context.Context, ruleId string, params *UpdateThreatDetectionRuleParams, body UpdateThreatDetectionRuleJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 // ListGovernancePolicies List governance policies.
@@ -1168,6 +1392,129 @@ func (c *Client) UpdateGovernancePolicyWithBody(ctx context.Context, policyId op
 // Corresponds with PATCH /governance/policies/{policyId} (the `UpdateGovernancePolicy` operationId).
 func (c *Client) UpdateGovernancePolicy(ctx context.Context, policyId openapi_types.UUID, params *UpdateGovernancePolicyParams, body UpdateGovernancePolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewUpdateGovernancePolicyRequest(c.Server, policyId, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ListThreatDetectionRules List threat detection rules.
+//
+// The rules the detection pipeline evaluates against agent activity, and how
+// each one is tuned.
+//
+// Rules are maintained by Manifold: what they look for is code, not
+// configuration, so there is nothing to author here and no create or delete.
+// What you can change is how a rule is applied — `PATCH` a rule to retune its
+// severity or switch it off.
+//
+// `enabled` is whether the rule runs at all.
+//
+// For what the rules have actually caught, see `GET /threats` — every threat
+// names the rule that produced it in `detection_rule_id`.
+//
+// Corresponds with GET /threats/detection-rules (the `ListThreatDetectionRules` operationId).
+func (c *Client) ListThreatDetectionRules(ctx context.Context, params *ListThreatDetectionRulesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListThreatDetectionRulesRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetThreatDetectionRule Get one threat detection rule.
+//
+// The rule, plus the text explaining what it detects and why it matters.
+//
+// Corresponds with GET /threats/detection-rules/{ruleId} (the `GetThreatDetectionRule` operationId).
+func (c *Client) GetThreatDetectionRule(ctx context.Context, ruleId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetThreatDetectionRuleRequest(c.Server, ruleId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// UpdateThreatDetectionRuleWithBody Tune one threat detection rule.
+//
+// Partial edit: send only the fields to change, at least one of them.
+//
+// Only the tuning fields are editable — `enabled`, `severity`. What the rule
+// detects is code Manifold maintains, so the text and the detection itself
+// are not editable from here; that is the difference between a detection
+// rule and a governance policy, which you author yourself.
+//
+// Retuning `severity` applies to the threats the rule has already raised as
+// well: severity is resolved when a threat is read, not stamped onto it, so
+// historical severity breakdowns re-bucket accordingly.
+//
+// Switching a rule off stops it producing new threats. The threats it already
+// raised stay — they record what was found — and stay triageable.
+//
+// Send `If-Match` with the `ETag` from the read this edit is based on and
+// the write applies only if nobody has retuned the rule since; a stale
+// version is refused with 412 and nothing is written. Without the header
+// the edit is unconditional and the last writer wins.
+//
+// An edit that changes nothing does not move the version, so the `ETag`
+// comes back unchanged.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with PATCH /threats/detection-rules/{ruleId} (the `UpdateThreatDetectionRule` operationId).
+func (c *Client) UpdateThreatDetectionRuleWithBody(ctx context.Context, ruleId string, params *UpdateThreatDetectionRuleParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateThreatDetectionRuleRequestWithBody(c.Server, ruleId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// UpdateThreatDetectionRule Tune one threat detection rule.
+//
+// Partial edit: send only the fields to change, at least one of them.
+//
+// Only the tuning fields are editable — `enabled`, `severity`. What the rule
+// detects is code Manifold maintains, so the text and the detection itself
+// are not editable from here; that is the difference between a detection
+// rule and a governance policy, which you author yourself.
+//
+// Retuning `severity` applies to the threats the rule has already raised as
+// well: severity is resolved when a threat is read, not stamped onto it, so
+// historical severity breakdowns re-bucket accordingly.
+//
+// Switching a rule off stops it producing new threats. The threats it already
+// raised stay — they record what was found — and stay triageable.
+//
+// Send `If-Match` with the `ETag` from the read this edit is based on and
+// the write applies only if nobody has retuned the rule since; a stale
+// version is refused with 412 and nothing is written. Without the header
+// the edit is unconditional and the last writer wins.
+//
+// An edit that changes nothing does not move the version, so the `ETag`
+// comes back unchanged.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with PATCH /threats/detection-rules/{ruleId} (the `UpdateThreatDetectionRule` operationId).
+func (c *Client) UpdateThreatDetectionRule(ctx context.Context, ruleId string, params *UpdateThreatDetectionRuleParams, body UpdateThreatDetectionRuleJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateThreatDetectionRuleRequest(c.Server, ruleId, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1549,6 +1896,264 @@ func NewUpdateGovernancePolicyRequestWithBody(server string, policyId openapi_ty
 	return req, nil
 }
 
+// NewListThreatDetectionRulesRequest constructs an http.Request for the ListThreatDetectionRules method
+func NewListThreatDetectionRulesRequest(server string, params *ListThreatDetectionRulesParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/threats/detection-rules")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Cursor != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cursor", *params.Cursor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.DetectionRuleId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "detection_rule_id", *params.DetectionRuleId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "array", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Category != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "category", *params.Category, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "array", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Severity != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "severity", *params.Severity, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "array", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Enabled != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "enabled", *params.Enabled, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Framework != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "framework", *params.Framework, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.Q != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "q", *params.Q, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.SortBy != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "sort_by", *params.SortBy, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.SortOrder != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "sort_order", *params.SortOrder, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetThreatDetectionRuleRequest constructs an http.Request for the GetThreatDetectionRule method
+func NewGetThreatDetectionRuleRequest(server string, ruleId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "ruleId", ruleId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/threats/detection-rules/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewUpdateThreatDetectionRuleRequest calls the generic UpdateThreatDetectionRule builder with application/json body
+func NewUpdateThreatDetectionRuleRequest(server string, ruleId string, params *UpdateThreatDetectionRuleParams, body UpdateThreatDetectionRuleJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpdateThreatDetectionRuleRequestWithBody(server, ruleId, params, "application/json", bodyReader)
+}
+
+// NewUpdateThreatDetectionRuleRequestWithBody constructs an http.Request for the UpdateThreatDetectionRule method, with any body, and a specified content type
+func NewUpdateThreatDetectionRuleRequestWithBody(server string, ruleId string, params *UpdateThreatDetectionRuleParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "ruleId", ruleId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/threats/detection-rules/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		if params.IfMatch != nil {
+			var headerParam0 string
+
+			headerParam0, err = runtime.StyleParamWithOptions("simple", false, "If-Match", *params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("If-Match", headerParam0)
+		}
+
+	}
+
+	return req, nil
+}
+
 func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
 	for _, r := range c.RequestEditors {
 		if err := r(ctx, req); err != nil {
@@ -1789,6 +2394,93 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with PATCH /governance/policies/{policyId} (the `UpdateGovernancePolicy` operationId).
 	UpdateGovernancePolicyWithResponse(ctx context.Context, policyId openapi_types.UUID, params *UpdateGovernancePolicyParams, body UpdateGovernancePolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateGovernancePolicyResponse, error)
+
+	// ListThreatDetectionRulesWithResponse List threat detection rules.
+	//
+	// The rules the detection pipeline evaluates against agent activity, and how
+	// each one is tuned.
+	//
+	// Rules are maintained by Manifold: what they look for is code, not
+	// configuration, so there is nothing to author here and no create or delete.
+	// What you can change is how a rule is applied — `PATCH` a rule to retune its
+	// severity or switch it off.
+	//
+	// `enabled` is whether the rule runs at all.
+	//
+	// For what the rules have actually caught, see `GET /threats` — every threat
+	// names the rule that produced it in `detection_rule_id`.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /threats/detection-rules (the `ListThreatDetectionRules` operationId).
+	ListThreatDetectionRulesWithResponse(ctx context.Context, params *ListThreatDetectionRulesParams, reqEditors ...RequestEditorFn) (*ListThreatDetectionRulesResponse, error)
+
+	// GetThreatDetectionRuleWithResponse Get one threat detection rule.
+	//
+	// The rule, plus the text explaining what it detects and why it matters.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /threats/detection-rules/{ruleId} (the `GetThreatDetectionRule` operationId).
+	GetThreatDetectionRuleWithResponse(ctx context.Context, ruleId string, reqEditors ...RequestEditorFn) (*GetThreatDetectionRuleResponse, error)
+
+	// UpdateThreatDetectionRuleWithBodyWithResponse Tune one threat detection rule.
+	//
+	// Partial edit: send only the fields to change, at least one of them.
+	//
+	// Only the tuning fields are editable — `enabled`, `severity`. What the rule
+	// detects is code Manifold maintains, so the text and the detection itself
+	// are not editable from here; that is the difference between a detection
+	// rule and a governance policy, which you author yourself.
+	//
+	// Retuning `severity` applies to the threats the rule has already raised as
+	// well: severity is resolved when a threat is read, not stamped onto it, so
+	// historical severity breakdowns re-bucket accordingly.
+	//
+	// Switching a rule off stops it producing new threats. The threats it already
+	// raised stay — they record what was found — and stay triageable.
+	//
+	// Send `If-Match` with the `ETag` from the read this edit is based on and
+	// the write applies only if nobody has retuned the rule since; a stale
+	// version is refused with 412 and nothing is written. Without the header
+	// the edit is unconditional and the last writer wins.
+	//
+	// An edit that changes nothing does not move the version, so the `ETag`
+	// comes back unchanged.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PATCH /threats/detection-rules/{ruleId} (the `UpdateThreatDetectionRule` operationId).
+	UpdateThreatDetectionRuleWithBodyWithResponse(ctx context.Context, ruleId string, params *UpdateThreatDetectionRuleParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateThreatDetectionRuleResponse, error)
+
+	// UpdateThreatDetectionRuleWithResponse Tune one threat detection rule.
+	//
+	// Partial edit: send only the fields to change, at least one of them.
+	//
+	// Only the tuning fields are editable — `enabled`, `severity`. What the rule
+	// detects is code Manifold maintains, so the text and the detection itself
+	// are not editable from here; that is the difference between a detection
+	// rule and a governance policy, which you author yourself.
+	//
+	// Retuning `severity` applies to the threats the rule has already raised as
+	// well: severity is resolved when a threat is read, not stamped onto it, so
+	// historical severity breakdowns re-bucket accordingly.
+	//
+	// Switching a rule off stops it producing new threats. The threats it already
+	// raised stay — they record what was found — and stay triageable.
+	//
+	// Send `If-Match` with the `ETag` from the read this edit is based on and
+	// the write applies only if nobody has retuned the rule since; a stale
+	// version is refused with 412 and nothing is written. Without the header
+	// the edit is unconditional and the last writer wins.
+	//
+	// An edit that changes nothing does not move the version, so the `ETag`
+	// comes back unchanged.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PATCH /threats/detection-rules/{ruleId} (the `UpdateThreatDetectionRule` operationId).
+	UpdateThreatDetectionRuleWithResponse(ctx context.Context, ruleId string, params *UpdateThreatDetectionRuleParams, body UpdateThreatDetectionRuleJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateThreatDetectionRuleResponse, error)
 }
 
 // ListGovernancePoliciesResponse429Headers the declared response headers of an HTTP 429 response for ListGovernancePolicies
@@ -2227,6 +2919,262 @@ func (r UpdateGovernancePolicyResponse) ContentType() string {
 	return ""
 }
 
+// ListThreatDetectionRulesResponse429Headers the declared response headers of an HTTP 429 response for ListThreatDetectionRules
+type ListThreatDetectionRulesResponse429Headers struct {
+	RetryAfter *int
+}
+
+type ListThreatDetectionRulesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ThreatDetectionRuleList
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
+	ApplicationproblemJSON429 *TooManyRequests
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalError
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *ListThreatDetectionRulesResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ListThreatDetectionRulesResponse) GetJSON200() *ThreatDetectionRuleList {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r ListThreatDetectionRulesResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r ListThreatDetectionRulesResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON429 returns the response for an HTTP 429 `application/problem+json` response
+func (r ListThreatDetectionRulesResponse) GetApplicationproblemJSON429() *TooManyRequests {
+	return r.ApplicationproblemJSON429
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r ListThreatDetectionRulesResponse) GetApplicationproblemJSON500() *InternalError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r ListThreatDetectionRulesResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ListThreatDetectionRulesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListThreatDetectionRulesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListThreatDetectionRulesResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// GetThreatDetectionRuleResponse200Headers the declared response headers of an HTTP 200 response for GetThreatDetectionRule
+type GetThreatDetectionRuleResponse200Headers struct {
+	ETag *string
+}
+
+// GetThreatDetectionRuleResponse429Headers the declared response headers of an HTTP 429 response for GetThreatDetectionRule
+type GetThreatDetectionRuleResponse429Headers struct {
+	RetryAfter *int
+}
+
+type GetThreatDetectionRuleResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ThreatDetectionRule
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
+	ApplicationproblemJSON429 *TooManyRequests
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalError
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *GetThreatDetectionRuleResponse200Headers
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *GetThreatDetectionRuleResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetThreatDetectionRuleResponse) GetJSON200() *ThreatDetectionRule {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r GetThreatDetectionRuleResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r GetThreatDetectionRuleResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON429 returns the response for an HTTP 429 `application/problem+json` response
+func (r GetThreatDetectionRuleResponse) GetApplicationproblemJSON429() *TooManyRequests {
+	return r.ApplicationproblemJSON429
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r GetThreatDetectionRuleResponse) GetApplicationproblemJSON500() *InternalError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r GetThreatDetectionRuleResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetThreatDetectionRuleResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetThreatDetectionRuleResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetThreatDetectionRuleResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// UpdateThreatDetectionRuleResponse200Headers the declared response headers of an HTTP 200 response for UpdateThreatDetectionRule
+type UpdateThreatDetectionRuleResponse200Headers struct {
+	ETag *string
+}
+
+// UpdateThreatDetectionRuleResponse429Headers the declared response headers of an HTTP 429 response for UpdateThreatDetectionRule
+type UpdateThreatDetectionRuleResponse429Headers struct {
+	RetryAfter *int
+}
+
+type UpdateThreatDetectionRuleResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ThreatDetectionRule
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON412 the response for an HTTP 412 `application/problem+json` response
+	ApplicationproblemJSON412 *PreconditionFailed
+	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
+	ApplicationproblemJSON429 *TooManyRequests
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalError
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *UpdateThreatDetectionRuleResponse200Headers
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *UpdateThreatDetectionRuleResponse429Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r UpdateThreatDetectionRuleResponse) GetJSON200() *ThreatDetectionRule {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r UpdateThreatDetectionRuleResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r UpdateThreatDetectionRuleResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r UpdateThreatDetectionRuleResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON412 returns the response for an HTTP 412 `application/problem+json` response
+func (r UpdateThreatDetectionRuleResponse) GetApplicationproblemJSON412() *PreconditionFailed {
+	return r.ApplicationproblemJSON412
+}
+
+// GetApplicationproblemJSON429 returns the response for an HTTP 429 `application/problem+json` response
+func (r UpdateThreatDetectionRuleResponse) GetApplicationproblemJSON429() *TooManyRequests {
+	return r.ApplicationproblemJSON429
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r UpdateThreatDetectionRuleResponse) GetApplicationproblemJSON500() *InternalError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r UpdateThreatDetectionRuleResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r UpdateThreatDetectionRuleResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpdateThreatDetectionRuleResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UpdateThreatDetectionRuleResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 // ListGovernancePoliciesWithResponse List governance policies.
 //
 // The governance catalog: the policies evaluated against agent activity, and
@@ -2464,6 +3412,117 @@ func (c *ClientWithResponses) UpdateGovernancePolicyWithResponse(ctx context.Con
 		return nil, err
 	}
 	return ParseUpdateGovernancePolicyResponse(rsp)
+}
+
+// ListThreatDetectionRulesWithResponse List threat detection rules.
+//
+// The rules the detection pipeline evaluates against agent activity, and how
+// each one is tuned.
+//
+// Rules are maintained by Manifold: what they look for is code, not
+// configuration, so there is nothing to author here and no create or delete.
+// What you can change is how a rule is applied — `PATCH` a rule to retune its
+// severity or switch it off.
+//
+// `enabled` is whether the rule runs at all.
+//
+// For what the rules have actually caught, see `GET /threats` — every threat
+// names the rule that produced it in `detection_rule_id`.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /threats/detection-rules (the `ListThreatDetectionRules` operationId).
+func (c *ClientWithResponses) ListThreatDetectionRulesWithResponse(ctx context.Context, params *ListThreatDetectionRulesParams, reqEditors ...RequestEditorFn) (*ListThreatDetectionRulesResponse, error) {
+	rsp, err := c.ListThreatDetectionRules(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListThreatDetectionRulesResponse(rsp)
+}
+
+// GetThreatDetectionRuleWithResponse Get one threat detection rule.
+//
+// The rule, plus the text explaining what it detects and why it matters.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /threats/detection-rules/{ruleId} (the `GetThreatDetectionRule` operationId).
+func (c *ClientWithResponses) GetThreatDetectionRuleWithResponse(ctx context.Context, ruleId string, reqEditors ...RequestEditorFn) (*GetThreatDetectionRuleResponse, error) {
+	rsp, err := c.GetThreatDetectionRule(ctx, ruleId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetThreatDetectionRuleResponse(rsp)
+}
+
+// UpdateThreatDetectionRuleWithBodyWithResponse Tune one threat detection rule.
+//
+// Partial edit: send only the fields to change, at least one of them.
+//
+// Only the tuning fields are editable — `enabled`, `severity`. What the rule
+// detects is code Manifold maintains, so the text and the detection itself
+// are not editable from here; that is the difference between a detection
+// rule and a governance policy, which you author yourself.
+//
+// Retuning `severity` applies to the threats the rule has already raised as
+// well: severity is resolved when a threat is read, not stamped onto it, so
+// historical severity breakdowns re-bucket accordingly.
+//
+// Switching a rule off stops it producing new threats. The threats it already
+// raised stay — they record what was found — and stay triageable.
+//
+// Send `If-Match` with the `ETag` from the read this edit is based on and
+// the write applies only if nobody has retuned the rule since; a stale
+// version is refused with 412 and nothing is written. Without the header
+// the edit is unconditional and the last writer wins.
+//
+// An edit that changes nothing does not move the version, so the `ETag`
+// comes back unchanged.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PATCH /threats/detection-rules/{ruleId} (the `UpdateThreatDetectionRule` operationId).
+func (c *ClientWithResponses) UpdateThreatDetectionRuleWithBodyWithResponse(ctx context.Context, ruleId string, params *UpdateThreatDetectionRuleParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateThreatDetectionRuleResponse, error) {
+	rsp, err := c.UpdateThreatDetectionRuleWithBody(ctx, ruleId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateThreatDetectionRuleResponse(rsp)
+}
+
+// UpdateThreatDetectionRuleWithResponse Tune one threat detection rule.
+//
+// Partial edit: send only the fields to change, at least one of them.
+//
+// Only the tuning fields are editable — `enabled`, `severity`. What the rule
+// detects is code Manifold maintains, so the text and the detection itself
+// are not editable from here; that is the difference between a detection
+// rule and a governance policy, which you author yourself.
+//
+// Retuning `severity` applies to the threats the rule has already raised as
+// well: severity is resolved when a threat is read, not stamped onto it, so
+// historical severity breakdowns re-bucket accordingly.
+//
+// Switching a rule off stops it producing new threats. The threats it already
+// raised stay — they record what was found — and stay triageable.
+//
+// Send `If-Match` with the `ETag` from the read this edit is based on and
+// the write applies only if nobody has retuned the rule since; a stale
+// version is refused with 412 and nothing is written. Without the header
+// the edit is unconditional and the last writer wins.
+//
+// An edit that changes nothing does not move the version, so the `ETag`
+// comes back unchanged.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PATCH /threats/detection-rules/{ruleId} (the `UpdateThreatDetectionRule` operationId).
+func (c *ClientWithResponses) UpdateThreatDetectionRuleWithResponse(ctx context.Context, ruleId string, params *UpdateThreatDetectionRuleParams, body UpdateThreatDetectionRuleJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateThreatDetectionRuleResponse, error) {
+	rsp, err := c.UpdateThreatDetectionRule(ctx, ruleId, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateThreatDetectionRuleResponse(rsp)
 }
 
 // ParseListGovernancePoliciesResponse parses an HTTP response from a ListGovernancePoliciesWithResponse call
@@ -2856,6 +3915,241 @@ func ParseUpdateGovernancePolicyResponse(rsp *http.Response) (*UpdateGovernanceP
 		response.Headers200 = &headers
 	case rsp.StatusCode == 429:
 		var headers UpdateGovernancePolicyResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = &value
+		}
+		response.Headers429 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseListThreatDetectionRulesResponse parses an HTTP response from a ListThreatDetectionRulesWithResponse call
+func ParseListThreatDetectionRulesResponse(rsp *http.Response) (*ListThreatDetectionRulesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListThreatDetectionRulesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ThreatDetectionRuleList
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest TooManyRequests
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 429:
+		var headers ListThreatDetectionRulesResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = &value
+		}
+		response.Headers429 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseGetThreatDetectionRuleResponse parses an HTTP response from a GetThreatDetectionRuleWithResponse call
+func ParseGetThreatDetectionRuleResponse(rsp *http.Response) (*GetThreatDetectionRuleResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetThreatDetectionRuleResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ThreatDetectionRule
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest TooManyRequests
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers GetThreatDetectionRuleResponse200Headers
+		if values := rsp.Header.Values("ETag"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "ETag", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.ETag = &value
+		}
+		response.Headers200 = &headers
+	case rsp.StatusCode == 429:
+		var headers GetThreatDetectionRuleResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = &value
+		}
+		response.Headers429 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseUpdateThreatDetectionRuleResponse parses an HTTP response from a UpdateThreatDetectionRuleWithResponse call
+func ParseUpdateThreatDetectionRuleResponse(rsp *http.Response) (*UpdateThreatDetectionRuleResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpdateThreatDetectionRuleResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ThreatDetectionRule
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 412:
+		var dest PreconditionFailed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON412 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest TooManyRequests
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers UpdateThreatDetectionRuleResponse200Headers
+		if values := rsp.Header.Values("ETag"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "ETag", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.ETag = &value
+		}
+		response.Headers200 = &headers
+	case rsp.StatusCode == 429:
+		var headers UpdateThreatDetectionRuleResponse429Headers
 		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
 			var value int
 			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: ""}); err != nil {
