@@ -36,6 +36,7 @@ type fakeAPI struct {
 	noETag   bool
 	// failNext holds statuses served, in order, before "METHOD /path" reaches its handler.
 	failNext  map[string][]int
+	groups    []client.CustomDeviceGroup
 	requests  []string
 	patches   []fakePatch
 	lastQuery url.Values
@@ -125,6 +126,11 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		}
 		f.versions[id]++
 		f.writeRule(w, rule)
+	})
+
+	api("GET /api/management/v1/devices/groups", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(client.CustomDeviceGroupList{Groups: f.groups})
 	})
 
 	f.Server = httptest.NewServer(mux)

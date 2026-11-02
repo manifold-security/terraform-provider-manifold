@@ -12,6 +12,7 @@ It covers governance policies and threat detection rules today, and more of the 
 | Resource | `manifold_threat_detection_rule` | Tunes a built-in detection rule (`enabled`, `severity`). Import takes the rule id. |
 | Data source | `manifold_threat_detection_rule` | Reads one detection rule by id, with what it detects. |
 | Data source | `manifold_threat_detection_rules` | Lists detection rules with optional filters. |
+| Data source | `manifold_device_groups` | Lists custom device groups, to look up a group's id by name. |
 
 Full reference docs are in [`docs/`](docs/), with working configurations in [`examples/`](examples/).
 
@@ -51,6 +52,7 @@ The provider logs in as an OIDC client using the OAuth2 client credentials flow.
 | `write:policies` | governance policy create, update, delete |
 | `read:threats` | detection rule data sources, plan, refresh |
 | `write:threats` | detection rule tuning |
+| `read:fleet` | `manifold_device_groups` |
 
 Grant only the scopes for what your configuration manages.
 
@@ -91,7 +93,7 @@ With the override in place you can run plan and apply straight away; `init` isn'
 
 ### Acceptance tests
 
-The acceptance tests (`TestAcc*`) drive the real CLI binary against a live Manifold instance and only run under `make testacc`. They need an OIDC client with `read:policies`, `write:policies`, `read:threats` and `write:threats`, and the `MANIFOLD_*` variables from [Authentication](#authentication) exported in your shell. CI runs them on `main` from the `acceptance` environment and skips the job when it isn't configured.
+The acceptance tests (`TestAcc*`) drive the real CLI binary against a live Manifold instance and only run under `make testacc`. They need an OIDC client with `read:policies`, `write:policies`, `read:threats`, `write:threats`, and `read:fleet`, and the `MANIFOLD_*` variables from [Authentication](#authentication) exported in your shell. CI runs them on `main` from the `acceptance` environment and skips the job when it isn't configured.
 
 Each test creates the policies it needs and titles them `tf-acc-*`. A run that dies halfway can leave some behind; `make sweep` deletes them. Detection rules can't be created, so the rule test retunes whichever rule the list returns first and puts it back afterwards.
 
