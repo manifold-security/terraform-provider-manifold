@@ -168,6 +168,29 @@ func (m *Manifold) ListAllGovernancePolicies(ctx context.Context, params ListGov
 	}
 }
 
+// ListAllThreatDetectionRules walks every page; params.Cursor and params.Limit are managed here.
+func (m *Manifold) ListAllThreatDetectionRules(ctx context.Context, params ListThreatDetectionRulesParams) ([]ThreatDetectionRuleSummary, error) {
+	limit := maxPageSize
+	params.Limit = &limit
+	params.Cursor = nil
+
+	var out []ThreatDetectionRuleSummary
+	for {
+		resp, err := m.ListThreatDetectionRulesWithResponse(ctx, &params)
+		if err != nil {
+			return nil, err
+		}
+		if resp.JSON200 == nil {
+			return nil, NewAPIError(resp.StatusCode(), resp.Body)
+		}
+		out = append(out, resp.JSON200.Data...)
+		if !resp.JSON200.HasNext || resp.JSON200.NextCursor == nil {
+			return out, nil
+		}
+		params.Cursor = resp.JSON200.NextCursor
+	}
+}
+
 type APIError struct {
 	StatusCode int
 	Problem    *Problem

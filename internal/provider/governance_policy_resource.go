@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -27,8 +26,6 @@ import (
 
 	"github.com/manifold-security/terraform-provider-manifold/internal/client"
 )
-
-const etagKey = "etag"
 
 var (
 	_ resource.ResourceWithConfigure      = &governancePolicyResource{}
@@ -248,7 +245,7 @@ func (r *governancePolicyResource) Update(ctx context.Context, req resource.Upda
 
 	body, diags := changedFields(ctx, plan, state)
 	resp.Diagnostics.Append(diags...)
-	etag, d := readETag(ctx, req.Private)
+	etag, d := readETag(ctx, req.Private, "governance policy")
 	resp.Diagnostics.Append(d...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -284,7 +281,7 @@ func (r *governancePolicyResource) Update(ctx context.Context, req resource.Upda
 func (r *governancePolicyResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var state governancePolicyDetailModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
-	etag, d := readETag(ctx, req.Private)
+	etag, d := readETag(ctx, req.Private, "governance policy")
 	resp.Diagnostics.Append(d...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -416,18 +413,6 @@ func changedFields(ctx context.Context, plan, state governancePolicyDetailModel)
 	return u, diags
 }
 
-type stateSetter interface {
-	Set(ctx context.Context, val any) diag.Diagnostics
-}
-
-type privateState interface {
-	SetKey(ctx context.Context, key string, value []byte) diag.Diagnostics
-}
-
-type privateReader interface {
-	GetKey(ctx context.Context, key string) ([]byte, diag.Diagnostics)
-}
-
 func (r *governancePolicyResource) setState(ctx context.Context, p client.GovernancePolicy, httpResp *http.Response, state stateSetter, private privateState, diags *diag.Diagnostics) {
 	m, d := newGovernancePolicyDetailModel(ctx, p)
 	diags.Append(d...)
@@ -435,28 +420,5 @@ func (r *governancePolicyResource) setState(ctx context.Context, p client.Govern
 		return
 	}
 	diags.Append(state.Set(ctx, &m)...)
-
-	var raw []byte
-	if etag := httpResp.Header.Get("ETag"); etag != "" {
-		raw, _ = json.Marshal(etag)
-	}
-	diags.Append(private.SetKey(ctx, etagKey, raw)...)
-}
-
-func readETag(ctx context.Context, private privateReader) (*string, diag.Diagnostics) {
-	raw, diags := private.GetKey(ctx, etagKey)
-	if diags.HasError() {
-		return nil, diags
-	}
-	if len(raw) == 0 {
-		diags.AddError("Missing ETag for governance policy",
-			"The last read of this policy returned no ETag, so the change can't be guarded against concurrent edits and was not sent. Run plan again to refresh it.")
-		return nil, diags
-	}
-	var etag string
-	if err := json.Unmarshal(raw, &etag); err != nil {
-		diags.AddError("Corrupt private state", err.Error())
-		return nil, diags
-	}
-	return &etag, diags
+	diags.Append(storeETag(ctx, httpResp, private)...)
 }

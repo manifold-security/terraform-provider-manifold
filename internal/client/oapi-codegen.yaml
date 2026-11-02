@@ -11,3 +11,7 @@ output-options:
     - createGovernancePolicy
     - updateGovernancePolicy
     - deleteGovernancePolicy
+    - listThreatDetectionRules
+    - getThreatDetectionRule
+    - updateThreatDetectionRule
+    - listDeviceGroups

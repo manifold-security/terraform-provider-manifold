@@ -24,9 +24,14 @@ func TestProviderSchema(t *testing.T) {
 	for _, d := range resp.Diagnostics {
 		t.Errorf("%s: %s", d.Summary, d.Detail)
 	}
-	for _, name := range []string{"manifold_governance_policy", "manifold_governance_policies"} {
+	for _, name := range []string{"manifold_governance_policy", "manifold_governance_policies", "manifold_threat_detection_rule", "manifold_threat_detection_rules", "manifold_device_groups"} {
 		if _, ok := resp.DataSourceSchemas[name]; !ok {
 			t.Errorf("data source %s not registered", name)
+		}
+	}
+	for _, name := range []string{"manifold_governance_policy", "manifold_threat_detection_rule"} {
+		if _, ok := resp.ResourceSchemas[name]; !ok {
+			t.Errorf("resource %s not registered", name)
 		}
 	}
 }

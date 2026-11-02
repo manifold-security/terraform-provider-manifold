@@ -14,11 +14,11 @@ func (f fakePrivate) GetKey(_ context.Context, key string) ([]byte, diag.Diagnos
 }
 
 func TestReadETagFailsClosed(t *testing.T) {
-	if _, diags := readETag(t.Context(), fakePrivate{}); !diags.HasError() {
+	if _, diags := readETag(t.Context(), fakePrivate{}, "governance policy"); !diags.HasError() {
 		t.Fatal("expected an error when no ETag is stored")
 	}
 
-	etag, diags := readETag(t.Context(), fakePrivate{etagKey: []byte(`"\"2026-10-21T14:24:23Z\""`)})
+	etag, diags := readETag(t.Context(), fakePrivate{etagKey: []byte(`"\"2026-10-21T14:24:23Z\""`)}, "governance policy")
 	if diags.HasError() {
 		t.Fatal(diags)
 	}
