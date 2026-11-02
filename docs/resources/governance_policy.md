@@ -16,22 +16,21 @@ Updates send the `ETag` from the last refresh as `If-Match`, so a policy edited 
 ## Example Usage
 
 ```terraform
-resource "manifold_governance_policy" "no_prod_db_writes" {
-  title       = "Block writes to production databases"
-  description = "Agents must not run mutating SQL against production."
-  category    = "DATA"
-  action      = "correct"
+resource "manifold_governance_policy" "block_tagged_assets" {
+  title       = "Block assets tagged blocked"
+  description = "Agents must not use any asset an admin has tagged blocked."
+  category    = "USAGE"
+  action      = "block"
   severity    = "high"
   priority    = 10
 
-  response_message  = "{{ .Title }}: use the staging database or ask the on-call DBA."
+  response_message  = "{{ .Title }}: this asset is not approved for use."
   taxonomy_mappings = ["OWASP-ASI02"]
 
   cedar_policy = <<-EOT
-    forbid(principal, action, resource is Event::Tool)
+    forbid(principal, action, resource)
     when {
-      resource.input like "*prod-db*" &&
-      (resource.input like "*INSERT*" || resource.input like "*UPDATE*" || resource.input like "*DELETE*")
+      context has "involved_asset_tags" && context.involved_asset_tags.contains("blocked")
     };
   EOT
 

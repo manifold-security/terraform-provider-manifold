@@ -55,7 +55,7 @@ The provider logs in as an OIDC client using the OAuth2 client credentials flow.
 | `client_id` | `MANIFOLD_CLIENT_ID` | |
 | `client_secret` | `MANIFOLD_CLIENT_SECRET` | |
 
-You don't configure the token URL, audience or API path. The provider requests tokens from `https://<auth_domain>/oauth/token` with audience `<endpoint>/management/api` and calls the API at `<endpoint>/api/management/v1`. Both must be https. Tokens expire after 15 minutes and the provider fetches a new one when that happens. It retries 429 and 5xx responses and waits as long as `Retry-After` asks.
+You don't configure the token URL, audience or API path. The provider requests tokens from `https://<auth_domain>/oauth/token` with audience `<endpoint>/management/api` and calls the API at `<endpoint>/api/management/v1`. Both must be https. Tokens expire after 15 minutes and the provider fetches a new one when that happens. It retries 429 on every request and waits as long as `Retry-After` asks. 5xx responses and network errors are retried only on reads and deletes; a replayed create could duplicate the policy and a replayed update would fail its `If-Match` check, so a 5xx on either fails the apply.
 
 ## Development
 
