@@ -148,5 +148,6 @@ func (p *manifoldProvider) DataSources(_ context.Context) []func() datasource.Da
 		NewGovernancePoliciesDataSource,
 		NewThreatDetectionRuleDataSource,
 		NewThreatDetectionRulesDataSource,
+		NewDeviceGroupsDataSource,
 	}
 }

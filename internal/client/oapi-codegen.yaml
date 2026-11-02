@@ -14,3 +14,4 @@ output-options:
     - listThreatDetectionRules
     - getThreatDetectionRule
     - updateThreatDetectionRule
+    - listDeviceGroups

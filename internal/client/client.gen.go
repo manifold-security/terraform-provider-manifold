@@ -150,6 +150,28 @@ func (e ThreatDetectionRuleSortBy) Valid() bool {
 	}
 }
 
+// CustomDeviceGroup A custom (admin-defined) endpoint group.
+type CustomDeviceGroup struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Description Free-text group description; empty when unset.
+	Description string `json:"description"`
+
+	// Id Stable group identifier.
+	Id openapi_types.UUID `json:"id"`
+
+	// MemberCount Number of devices currently assigned to the group.
+	MemberCount int `json:"member_count"`
+
+	// Name Unique group name; a human-facing display label.
+	Name string `json:"name"`
+}
+
+// CustomDeviceGroupList The custom endpoint groups.
+type CustomDeviceGroupList struct {
+	Groups []CustomDeviceGroup `json:"groups"`
+}
+
 // FieldError defines model for FieldError.
 type FieldError struct {
 	// Code Machine-readable discriminator for a single field-level validation
@@ -866,6 +888,16 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 // The interface specification for the client above.
 type ClientInterface interface {
 
+	// ListDeviceGroups List custom endpoint groups.
+	//
+	// Lists every custom (admin-defined) endpoint group with its current member
+	// count, ordered by name. Custom groups are first-class, manually assigned
+	// collections of devices — distinct from the metadata facets returned by
+	// `/devices/filter`.
+	//
+	// Corresponds with GET /devices/groups (the `ListDeviceGroups` operationId).
+	ListDeviceGroups(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListGovernancePolicies List governance policies.
 	//
 	// The governance catalog: the policies evaluated against agent activity, and
@@ -1139,6 +1171,26 @@ type ClientInterface interface {
 	//
 	// Corresponds with PATCH /threats/detection-rules/{ruleId} (the `UpdateThreatDetectionRule` operationId).
 	UpdateThreatDetectionRule(ctx context.Context, ruleId string, params *UpdateThreatDetectionRuleParams, body UpdateThreatDetectionRuleJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+}
+
+// ListDeviceGroups List custom endpoint groups.
+//
+// Lists every custom (admin-defined) endpoint group with its current member
+// count, ordered by name. Custom groups are first-class, manually assigned
+// collections of devices — distinct from the metadata facets returned by
+// `/devices/filter`.
+//
+// Corresponds with GET /devices/groups (the `ListDeviceGroups` operationId).
+func (c *Client) ListDeviceGroups(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListDeviceGroupsRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
 }
 
 // ListGovernancePolicies List governance policies.
@@ -1523,6 +1575,33 @@ func (c *Client) UpdateThreatDetectionRule(ctx context.Context, ruleId string, p
 		return nil, err
 	}
 	return c.Client.Do(req)
+}
+
+// NewListDeviceGroupsRequest constructs an http.Request for the ListDeviceGroups method
+func NewListDeviceGroupsRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/devices/groups")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
 }
 
 // NewListGovernancePoliciesRequest constructs an http.Request for the ListGovernancePolicies method
@@ -2198,6 +2277,18 @@ func WithBaseURL(baseURL string) ClientOption {
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
 
+	// ListDeviceGroupsWithResponse List custom endpoint groups.
+	//
+	// Lists every custom (admin-defined) endpoint group with its current member
+	// count, ordered by name. Custom groups are first-class, manually assigned
+	// collections of devices — distinct from the metadata facets returned by
+	// `/devices/filter`.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /devices/groups (the `ListDeviceGroups` operationId).
+	ListDeviceGroupsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListDeviceGroupsResponse, error)
+
 	// ListGovernancePoliciesWithResponse List governance policies.
 	//
 	// The governance catalog: the policies evaluated against agent activity, and
@@ -2481,6 +2572,47 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with PATCH /threats/detection-rules/{ruleId} (the `UpdateThreatDetectionRule` operationId).
 	UpdateThreatDetectionRuleWithResponse(ctx context.Context, ruleId string, params *UpdateThreatDetectionRuleParams, body UpdateThreatDetectionRuleJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateThreatDetectionRuleResponse, error)
+}
+
+type ListDeviceGroupsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *CustomDeviceGroupList
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ListDeviceGroupsResponse) GetJSON200() *CustomDeviceGroupList {
+	return r.JSON200
+}
+
+// GetBody returns the raw response body bytes
+func (r ListDeviceGroupsResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ListDeviceGroupsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListDeviceGroupsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListDeviceGroupsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
 }
 
 // ListGovernancePoliciesResponse429Headers the declared response headers of an HTTP 429 response for ListGovernancePolicies
@@ -3175,6 +3307,24 @@ func (r UpdateThreatDetectionRuleResponse) ContentType() string {
 	return ""
 }
 
+// ListDeviceGroupsWithResponse List custom endpoint groups.
+//
+// Lists every custom (admin-defined) endpoint group with its current member
+// count, ordered by name. Custom groups are first-class, manually assigned
+// collections of devices — distinct from the metadata facets returned by
+// `/devices/filter`.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /devices/groups (the `ListDeviceGroups` operationId).
+func (c *ClientWithResponses) ListDeviceGroupsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListDeviceGroupsResponse, error) {
+	rsp, err := c.ListDeviceGroups(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListDeviceGroupsResponse(rsp)
+}
+
 // ListGovernancePoliciesWithResponse List governance policies.
 //
 // The governance catalog: the policies evaluated against agent activity, and
@@ -3523,6 +3673,44 @@ func (c *ClientWithResponses) UpdateThreatDetectionRuleWithResponse(ctx context.
 		return nil, err
 	}
 	return ParseUpdateThreatDetectionRuleResponse(rsp)
+}
+
+// ParseListDeviceGroupsResponse parses an HTTP response from a ListDeviceGroupsWithResponse call
+func ParseListDeviceGroupsResponse(rsp *http.Response) (*ListDeviceGroupsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListDeviceGroupsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest CustomDeviceGroupList
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case rsp.StatusCode == 401:
+		break // No content-type
+
+	case rsp.StatusCode == 403:
+		break // No content-type
+
+	case rsp.StatusCode == 404:
+		break // No content-type
+
+	case rsp.StatusCode == 500:
+		break // No content-type
+
+	}
+
+	return response, nil
 }
 
 // ParseListGovernancePoliciesResponse parses an HTTP response from a ListGovernancePoliciesWithResponse call
