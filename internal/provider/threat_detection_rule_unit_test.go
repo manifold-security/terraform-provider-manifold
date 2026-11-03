@@ -87,16 +87,52 @@ func TestRuleCreateFailsClosedWithoutETag(t *testing.T) {
 	}
 }
 
-func TestRuleReadRemovesDeletedRule(t *testing.T) {
+func TestRuleRenamedUpstreamFailsThePlan(t *testing.T) {
 	h := resourceHarness{newHarness(t), ruleType}
-	state, diags := h.create(map[string]any{"id": "EXAMPLE-003"})
+	config := map[string]any{"id": "EXAMPLE-003", "enabled": false}
+	state, diags := h.create(config)
 	h.noErrors(diags)
 
 	delete(h.api.rules, "EXAMPLE-003")
 	read, diags := h.read(state)
 	h.noErrors(diags)
 	if !read.value.IsNull() {
-		t.Fatalf("state = %s, want it removed", read.value)
+		t.Fatalf("state = %s, want it removed so plans that drop the resource still work", read.value)
+	}
+	if len(diags) != 1 || !strings.Contains(diags[0].Detail, `"EXAMPLE-003"`) {
+		t.Errorf("diagnostics = %v, want one warning naming the rule", diags)
+	}
+
+	_, _, resp := h.plan(read, config)
+	msg := errorText(resp.Diagnostics)
+	for _, want := range []string{"Detection rule not found", "renamed or retired", "manifold_threat_detection_rules"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("plan errors = %q, want %q", msg, want)
+		}
+	}
+}
+
+func TestRuleChangingIDToUnknownRuleFailsThePlan(t *testing.T) {
+	h := resourceHarness{newHarness(t), ruleType}
+	state, diags := h.create(map[string]any{"id": "EXAMPLE-001"})
+	h.noErrors(diags)
+
+	_, _, resp := h.plan(state, map[string]any{"id": "EXAMPLE-404"})
+	if msg := errorText(resp.Diagnostics); !strings.Contains(msg, "Detection rule not found") {
+		t.Fatalf("plan errors = %q, want a not-found error", msg)
+	}
+}
+
+func TestRulePlanWithoutIDChangeSkipsLookup(t *testing.T) {
+	h := resourceHarness{newHarness(t), ruleType}
+	state, diags := h.create(map[string]any{"id": "EXAMPLE-001"})
+	h.noErrors(diags)
+	before := h.api.count("GET /threats/detection-rules/EXAMPLE-001")
+
+	_, _, resp := h.plan(state, map[string]any{"id": "EXAMPLE-001", "enabled": false})
+	h.noErrors(resp.Diagnostics)
+	if n := h.api.count("GET /threats/detection-rules/EXAMPLE-001"); n != before {
+		t.Errorf("plan sent %d GETs, want none", n-before)
 	}
 }
 
@@ -114,8 +150,8 @@ func TestRuleReadShowsDriftAndRetries(t *testing.T) {
 	if got := attrOf(t, read.value, "severity"); got != "critical" {
 		t.Errorf("severity = %v, want the drifted value", got)
 	}
-	if n := h.api.count("GET /threats/detection-rules/EXAMPLE-001"); n != 4 {
-		t.Errorf("GET sent %d times, want 4 (adopt, then 2 failures and a retry)", n)
+	if n := h.api.count("GET /threats/detection-rules/EXAMPLE-001"); n != 5 {
+		t.Errorf("GET sent %d times, want 5 (plan check and adopt, then 2 failures and a retry)", n)
 	}
 
 	planned, _, resp := h.plan(read, map[string]any{"id": "EXAMPLE-001", "severity": "high"})
@@ -211,7 +247,9 @@ func TestRuleImport(t *testing.T) {
 	}
 
 	missing, diags := h.importState("EXAMPLE-404")
-	h.noErrors(diags)
+	if len(diags) != 0 {
+		t.Errorf("diagnostics = %v, want none on top of Terraform's own", diags)
+	}
 	if !missing.value.IsNull() {
 		t.Errorf("imported state = %s, want null so Terraform reports the rule missing", missing.value)
 	}

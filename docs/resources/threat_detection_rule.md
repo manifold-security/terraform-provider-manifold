@@ -5,6 +5,7 @@ subcategory: ""
 description: |-
   Tunes one of Manifold's built-in threat detection rules. Rules can't be created or deleted, so this resource adopts an existing rule by id and manages only the attributes you set: enabled and severity. Leaving one out leaves it as it is.
   Destroying the resource only removes it from state; the rule keeps its last tuning, because the API doesn't expose a rule's default settings to reset it to. Set the values you want back before destroying if that matters.
+  A rule's id can stop existing when Manifold renames or retires the rule. Refresh then drops it from state with a warning, and the plan fails rather than proposing a create that can't succeed: set id to the rule's current id from manifold_threat_detection_rules, or remove the resource.
   Updates send the ETag from the last refresh as If-Match, so a rule retuned elsewhere after the plan was made fails the apply instead of being overwritten. Needs the read:threats and write:threats scopes.
 ---
 
@@ -13,6 +14,8 @@ description: |-
 Tunes one of Manifold's built-in threat detection rules. Rules can't be created or deleted, so this resource adopts an existing rule by id and manages only the attributes you set: `enabled` and `severity`. Leaving one out leaves it as it is.
 
 Destroying the resource only removes it from state; the rule keeps its last tuning, because the API doesn't expose a rule's default settings to reset it to. Set the values you want back before destroying if that matters.
+
+A rule's id can stop existing when Manifold renames or retires the rule. Refresh then drops it from state with a warning, and the plan fails rather than proposing a create that can't succeed: set `id` to the rule's current id from `manifold_threat_detection_rules`, or remove the resource.
 
 Updates send the `ETag` from the last refresh as `If-Match`, so a rule retuned elsewhere after the plan was made fails the apply instead of being overwritten. Needs the `read:threats` and `write:threats` scopes.
 
