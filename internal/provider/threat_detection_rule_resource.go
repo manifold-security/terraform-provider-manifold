@@ -23,6 +23,7 @@ import (
 var (
 	_ resource.ResourceWithConfigure   = &threatDetectionRuleResource{}
 	_ resource.ResourceWithImportState = &threatDetectionRuleResource{}
+	_ resource.ResourceWithModifyPlan  = &threatDetectionRuleResource{}
 )
 
 type threatDetectionRuleResource struct {
@@ -43,6 +44,7 @@ func (r *threatDetectionRuleResource) Schema(_ context.Context, _ resource.Schem
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Tunes one of Manifold's built-in threat detection rules. Rules can't be created or deleted, so this resource adopts an existing rule by id and manages only the attributes you set: `enabled` and `severity`. Leaving one out leaves it as it is.\n\n" +
 			"Destroying the resource only removes it from state; the rule keeps its last tuning, because the API doesn't expose a rule's default settings to reset it to. Set the values you want back before destroying if that matters.\n\n" +
+			"A rule's id can stop existing when Manifold renames or retires the rule. Refresh then drops it from state with a warning, and the plan fails rather than proposing a create that can't succeed: set `id` to the rule's current id from `manifold_threat_detection_rules`, or remove the resource.\n\n" +
 			"Updates send the `ETag` from the last refresh as `If-Match`, so a rule retuned elsewhere after the plan was made fails the apply instead of being overwritten. Needs the `read:threats` and `write:threats` scopes.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -127,8 +129,7 @@ func (r *threatDetectionRuleResource) Create(ctx context.Context, req resource.C
 	id := plan.ID.ValueString()
 	out, err := r.get(ctx, id)
 	if client.IsNotFound(err) {
-		resp.Diagnostics.AddAttributeError(path.Root("id"), "Detection rule not found",
-			fmt.Sprintf("No detection rule has id %q. Rules can't be created, only tuned; list them with the manifold_threat_detection_rules data source.", id))
+		addRuleNotFound(&resp.Diagnostics, id)
 		return
 	}
 	if err != nil {
@@ -165,6 +166,11 @@ func (r *threatDetectionRuleResource) Read(ctx context.Context, req resource.Rea
 
 	out, err := r.get(ctx, state.ID.ValueString())
 	if client.IsNotFound(err) {
+		// An error would also fail plans that drop the resource, removed blocks included as OpenTofu refreshes them, so ModifyPlan blocks the re-create instead.
+		if !state.Title.IsNull() { // imports carry only the id and Terraform reports those itself
+			resp.Diagnostics.AddWarning("Detection rule no longer exists",
+				fmt.Sprintf("Detection rule %q was not found, so it was removed from state. It may have been renamed or retired.", state.ID.ValueString()))
+		}
 		resp.State.RemoveResource(ctx)
 		return
 	}
@@ -174,6 +180,36 @@ func (r *threatDetectionRuleResource) Read(ctx context.Context, req resource.Rea
 	}
 
 	r.setState(ctx, *out.JSON200, out.HTTPResponse, &resp.State, resp.Private, &resp.Diagnostics)
+}
+
+// ModifyPlan checks an adopted id exists, so a renamed or retired rule fails the plan rather than the apply.
+func (r *threatDetectionRuleResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() || r.client == nil {
+		return
+	}
+	var planID, stateID types.String
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("id"), &planID)...)
+	if !req.State.Raw.IsNull() {
+		resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("id"), &stateID)...)
+	}
+	if resp.Diagnostics.HasError() || planID.IsUnknown() || planID.Equal(stateID) {
+		return
+	}
+
+	_, err := r.get(ctx, planID.ValueString())
+	if client.IsNotFound(err) {
+		addRuleNotFound(&resp.Diagnostics, planID.ValueString())
+		return
+	}
+	if err != nil {
+		resp.Diagnostics.AddError("Unable to read detection rule", err.Error())
+	}
+}
+
+func addRuleNotFound(diags *diag.Diagnostics, id string) {
+	diags.AddAttributeError(path.Root("id"), "Detection rule not found",
+		fmt.Sprintf("No detection rule has id %q. Rules can't be created, only tuned, and an id can stop existing when a rule is renamed or retired. "+
+			"Find the current id with the manifold_threat_detection_rules data source and set it here, or remove this resource from the configuration.", id))
 }
 
 func (r *threatDetectionRuleResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
